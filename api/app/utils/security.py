@@ -1,119 +1,80 @@
-"""
-Utilidades de seguridad y autenticación
-"""
-from datetime import datetime, timedelta
-from typing import Optional, Union
-from jose import JWTError, jwt
+# api/app/utils/security.py
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional, Dict
+
+from jose import jwt, JWTError
 from passlib.context import CryptContext
-from fastapi import HTTPException, status
+
 from ..config import settings
 
-# Contexto para hashing de contraseñas
+# BCrypt para hash/verify
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Verificar contraseña plana contra hash
-    """
-    return pwd_context.verify(plain_password, hashed_password)
-
-
 def get_password_hash(password: str) -> str:
-    """
-    Generar hash de contraseña
-    """
     return pwd_context.hash(password)
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    try:
+        return pwd_context.verify(plain_password, password_hash)
+    except Exception:
+        return False
+
+
+def _jwt_encode(claims: Dict[str, Any]) -> str:
     """
-    Crear token JWT de acceso
+    Encapsula el encode, usa secret y algorithm de settings.
+    """
+    return jwt.encode(claims, settings.secret_key, algorithm=settings.algorithm)
+
+
+def _jwt_decode(token: str) -> Dict[str, Any]:
+    """
+    Decodifica y valida firma/exp.
+    Lanza JWTError si no es válido.
+    """
+    return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+
+
+def create_access_token(data: Dict[str, Any], expires_minutes: Optional[int] = None) -> str:
+    """
+    Crea un access token JWT.
+    Debe incluir data["sub"] como string o int del user_id.
     """
     to_encode = data.copy()
-    
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(
-            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
-        )
-    
-    to_encode.update({"exp": expire})
-    
-    encoded_jwt = jwt.encode(
-        to_encode, 
-        settings.SECRET_KEY, 
-        algorithm=settings.ALGORITHM
-    )
-    
-    return encoded_jwt
+
+    exp_minutes = expires_minutes if expires_minutes is not None else settings.access_token_expire_minutes
+    expire = datetime.now(timezone.utc) + timedelta(minutes=int(exp_minutes))
+
+    # Recomendación: asegurar string en "sub"
+    if "sub" in to_encode:
+        to_encode["sub"] = str(to_encode["sub"])
+
+    to_encode.update({"exp": expire, "type": "access"})
+    return _jwt_encode(to_encode)
 
 
-def verify_token(token: str) -> dict:
+def create_refresh_token(user_id: int, days: int = 30) -> str:
     """
-    Verificar y decodificar token JWT
+    Crea un refresh token simple.
     """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    
-    try:
-        payload = jwt.decode(
-            token, 
-            settings.SECRET_KEY, 
-            algorithms=[settings.ALGORITHM]
-        )
-        
-        # Verificar que el token no haya expirado
-        exp = payload.get("exp")
-        if exp is None:
-            raise credentials_exception
-            
-        if datetime.utcnow().timestamp() > exp:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token has expired"
-            )
-        
-        return payload
-        
-    except JWTError:
-        raise credentials_exception
+    expire = datetime.now(timezone.utc) + timedelta(days=days)
+    to_encode = {"sub": str(user_id), "exp": expire, "type": "refresh"}
+    return _jwt_encode(to_encode)
 
 
 def get_user_id_from_token(token: str) -> int:
     """
-    Extraer user_id del token JWT
+    Devuelve el user_id (int) desde "sub" del JWT.
+    Lanza JWTError si es inválido/expirado.
     """
-    payload = verify_token(token)
-    user_id: int = payload.get("sub")
-    
-    if user_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials"
-        )
-    
-    return int(user_id)
-
-
-def create_refresh_token(user_id: int) -> str:
-    """
-    Crear token de refresh (válido por más tiempo)
-    """
-    data = {"sub": str(user_id), "type": "refresh"}
-    expires_delta = timedelta(days=7)  # Válido por 7 días
-    
-    return create_access_token(data, expires_delta)
-
-
-def validate_token_type(token: str, expected_type: str) -> bool:
-    """
-    Validar el tipo de token (access, refresh)
-    """
-    payload = verify_token(token)
-    token_type = payload.get("type", "access")
-    return token_type == expected_type
+    try:
+        payload = _jwt_decode(token)
+        sub = payload.get("sub")
+        if sub is None:
+            raise JWTError("Token sin 'sub'")
+        return int(sub)
+    except Exception as e:
+        # Re-empaquetar como JWTError para que los callers traten 401
+        raise JWTError(f"Token inválido: {e}") from e

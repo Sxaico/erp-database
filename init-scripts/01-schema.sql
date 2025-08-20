@@ -34,9 +34,15 @@ CREATE TABLE IF NOT EXISTS usuario_roles (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- garantizar que no se dupliquen asignaciones usuario-rol
+CREATE UNIQUE INDEX IF NOT EXISTS uq_usuario_roles_usuario_rol
+  ON usuario_roles(usuario_id, rol_id);
+
 -- Índices útiles
 CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email);
 CREATE INDEX IF NOT EXISTS idx_usuarios_activo ON usuarios(activo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_usuario_roles_usuario ON usuario_roles(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_usuario_roles_rol ON usuario_roles(rol_id);
 
 -- ===== Organización / Departamentos =====
 CREATE TABLE IF NOT EXISTS organizaciones (
@@ -44,7 +50,7 @@ CREATE TABLE IF NOT EXISTS organizaciones (
   uuid          UUID NOT NULL DEFAULT gen_random_uuid(),
   nombre        TEXT NOT NULL,
   razon_social  TEXT,
-  rfc           TEXT, -- o CUIT si prefieres; mantenlo opcional
+  rfc           TEXT,
   telefono      TEXT,
   email         TEXT,
   direccion     TEXT,
@@ -83,3 +89,5 @@ CREATE TABLE IF NOT EXISTS usuario_departamentos (
 -- Índices parciales para soft delete
 CREATE INDEX IF NOT EXISTS idx_orgs_activas ON organizaciones(id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_deptos_activos ON departamentos(id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_usuario_deptos_usuario ON usuario_departamentos(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_usuario_deptos_depto ON usuario_departamentos(departamento_id);

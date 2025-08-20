@@ -149,7 +149,7 @@ class OrganizacionBase(BaseModel):
     ciudad: Optional[str] = Field(None, max_length=100)
     estado: Optional[str] = Field(None, max_length=100)
     codigo_postal: Optional[str] = Field(None, max_length=10)
-    pais: str = Field(default="México", max_length=100)
+    pais: str = Field(default="Argentina", max_length=100)
 
 
 class OrganizacionCreate(OrganizacionBase):

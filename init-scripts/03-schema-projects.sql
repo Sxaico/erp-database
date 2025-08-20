@@ -2,25 +2,25 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS proyectos (
-  id                SERIAL PRIMARY KEY,
-  uuid              UUID NOT NULL DEFAULT gen_random_uuid(),
-  codigo            TEXT UNIQUE,
-  nombre            TEXT NOT NULL,
-  descripcion       TEXT,
-  organizacion_id   INT REFERENCES organizaciones(id) ON DELETE SET NULL,
+  id                 SERIAL PRIMARY KEY,
+  uuid               UUID NOT NULL DEFAULT gen_random_uuid(),
+  codigo             TEXT UNIQUE,
+  nombre             TEXT NOT NULL,
+  descripcion        TEXT,
+  organizacion_id    INT REFERENCES organizaciones(id) ON DELETE SET NULL,
   gerente_proyecto_id INT REFERENCES usuarios(id) ON DELETE SET NULL,
-  sponsor_id        INT REFERENCES usuarios(id) ON DELETE SET NULL,
-  prioridad         SMALLINT NOT NULL DEFAULT 3,
-  estado            TEXT NOT NULL DEFAULT 'EN_PROGRESO',
-  presupuesto_monto NUMERIC(14,2) DEFAULT 0,
-  avance_pct        NUMERIC(5,2) DEFAULT 0,
-  fecha_inicio      DATE,
-  fecha_fin_plan    DATE,
-  fecha_fin_real    DATE,
-  activo            BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  deleted_at        TIMESTAMPTZ
+  sponsor_id         INT REFERENCES usuarios(id) ON DELETE SET NULL,
+  prioridad          SMALLINT NOT NULL DEFAULT 3,
+  estado             TEXT NOT NULL DEFAULT 'EN_PROGRESO',
+  presupuesto_monto  NUMERIC(14,2) DEFAULT 0,
+  avance_pct         NUMERIC(5,2)  DEFAULT 0,
+  fecha_inicio       DATE,
+  fecha_fin_plan     DATE,
+  fecha_fin_real     DATE,
+  activo             BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at         TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_proy_codigo ON proyectos(codigo) WHERE deleted_at IS NULL;
