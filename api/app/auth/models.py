@@ -92,7 +92,7 @@ class Organizacion(Base):
     ciudad = Column(String(100))
     estado = Column(String(100))
     codigo_postal = Column(String(10))
-    pais = Column(String(100), default="Argentina")  # Cambiado de México a Argentina
+    pais = Column(String(100), default="México")
     activa = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

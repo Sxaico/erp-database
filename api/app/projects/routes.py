@@ -22,7 +22,6 @@ async def create_project(data: ProyectoCreate, db: AsyncSession = Depends(get_as
     )
     db.add(p)
     await db.flush()
-    await db.commit()
     await db.refresh(p)
     return ProyectoResponse.model_validate(p)
 
@@ -48,7 +47,7 @@ async def update_project(project_id: int, data: ProyectoUpdate, db: AsyncSession
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(p, k, v)
-    await db.commit()
+    await db.flush()
     await db.refresh(p)
     return ProyectoResponse.model_validate(p)
 
@@ -67,7 +66,6 @@ async def create_task(data: TareaCreate, db: AsyncSession = Depends(get_async_db
     )
     db.add(t)
     await db.flush()
-    await db.commit()
     await db.refresh(t)
     return TareaResponse.model_validate(t)
 
@@ -85,7 +83,7 @@ async def update_task(task_id: int, data: TareaUpdate, db: AsyncSession = Depend
         raise HTTPException(status_code=404, detail="Tarea no encontrada")
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(t, k, v)
-    await db.commit()
+    await db.flush()
     await db.refresh(t)
     return TareaResponse.model_validate(t)
 

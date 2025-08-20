@@ -57,7 +57,6 @@ async def login(
         
         # Actualizar último login
         user.ultimo_login = datetime.utcnow()
-        await db.commit()
         
         # Generar tokens
         access_token = create_access_token(data={"sub": str(user.id)})
@@ -127,7 +126,7 @@ async def update_current_user(
             else:
                 setattr(current_user, field, value)
         
-        await db.commit()
+        await db.flush()
         await db.refresh(current_user)
         
         logger.info(f"Usuario {current_user.email} actualizado")
@@ -170,7 +169,6 @@ async def change_password(
         
         # Actualizar contraseña
         current_user.password_hash = get_password_hash(password_data.new_password)
-        await db.commit()
         
         logger.info(f"Contraseña cambiada para usuario {current_user.email}")
         return MessageResponse(message="Contraseña actualizada correctamente")
@@ -243,7 +241,7 @@ async def create_user(
                 )
                 db.add(user_role)
         
-        await db.commit()
+        await db.flush()
         await db.refresh(new_user)
         
         # Cargar relaciones
