@@ -1,0 +1,1988 @@
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\.env
+---
+# api/.env
+APP_NAME="ERP API"
+VERSION="1.0.0"
+DESCRIPTION="Sistema de Gestión Empresarial - API Backend"
+
+DATABASE_URL="postgresql+asyncpg://erp_user:erp_password123@postgres:5432/erp_db"
+DATABASE_URL_SYNC="postgresql://erp_user:erp_password123@postgres:5432/erp_db"
+
+HOST="0.0.0.0"
+PORT=8000
+DEBUG=true
+
+SECRET_KEY="cambia-esto-en-produccion"
+ALGORITHM="HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+ALLOWED_ORIGINS="http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://127.0.0.1:8080"
+
+MAX_UPLOAD_SIZE=10485760
+ITEMS_PER_PAGE=50
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\Dockerfile
+---
+# api/Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc libpq-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./requirements.txt
+RUN pip install -r requirements.txt
+
+COPY app ./app
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host","0.0.0.0","--port","8000","--reload"]
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\requirements.txt
+---
+# FastAPI y servidor
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+
+# Base de datos
+sqlalchemy==2.0.23
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+
+# Autenticación y seguridad  
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# Validación y serialización
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Utilidades
+python-dotenv==1.0.0
+email-validator==2.1.0
+
+# Desarrollo y testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\01-schema.sql
+---
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- ===== Usuarios / Roles =====
+CREATE TABLE IF NOT EXISTS usuarios (
+  id             SERIAL PRIMARY KEY,
+  uuid           UUID NOT NULL DEFAULT gen_random_uuid(),
+  email          TEXT NOT NULL UNIQUE,
+  password_hash  TEXT NOT NULL,
+  nombre         TEXT NOT NULL,
+  apellido       TEXT NOT NULL,
+  telefono       TEXT,
+  activo         BOOLEAN NOT NULL DEFAULT TRUE,
+  ultimo_login   TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at     TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS roles (
+  id          SERIAL PRIMARY KEY,
+  nombre      TEXT NOT NULL UNIQUE,
+  descripcion TEXT,
+  activo      BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at  TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS usuario_roles (
+  id           SERIAL PRIMARY KEY,
+  usuario_id   INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  rol_id       INT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  asignado_por INT REFERENCES usuarios(id),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- garantizar que no se dupliquen asignaciones usuario-rol
+CREATE UNIQUE INDEX IF NOT EXISTS uq_usuario_roles_usuario_rol
+  ON usuario_roles(usuario_id, rol_id);
+
+-- Índices útiles
+CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email);
+CREATE INDEX IF NOT EXISTS idx_usuarios_activo ON usuarios(activo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_usuario_roles_usuario ON usuario_roles(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_usuario_roles_rol ON usuario_roles(rol_id);
+
+-- ===== Organización / Departamentos =====
+CREATE TABLE IF NOT EXISTS organizaciones (
+  id            SERIAL PRIMARY KEY,
+  uuid          UUID NOT NULL DEFAULT gen_random_uuid(),
+  nombre        TEXT NOT NULL,
+  razon_social  TEXT,
+  rfc           TEXT,
+  telefono      TEXT,
+  email         TEXT,
+  direccion     TEXT,
+  ciudad        TEXT,
+  estado        TEXT,
+  codigo_postal TEXT,
+  pais          TEXT NOT NULL DEFAULT 'Argentina',
+  activa        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at    TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS departamentos (
+  id                     SERIAL PRIMARY KEY,
+  uuid                   UUID NOT NULL DEFAULT gen_random_uuid(),
+  nombre                 TEXT NOT NULL,
+  descripcion            TEXT,
+  organizacion_id        INT REFERENCES organizaciones(id) ON DELETE CASCADE,
+  departamento_padre_id  INT REFERENCES departamentos(id),
+  responsable_id         INT REFERENCES usuarios(id),
+  activo                 BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at             TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS usuario_departamentos (
+  id               SERIAL PRIMARY KEY,
+  usuario_id       INT REFERENCES usuarios(id) ON DELETE CASCADE,
+  departamento_id  INT REFERENCES departamentos(id) ON DELETE CASCADE,
+  es_responsable   BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Índices parciales para soft delete
+CREATE INDEX IF NOT EXISTS idx_orgs_activas ON organizaciones(id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_deptos_activos ON departamentos(id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_usuario_deptos_usuario ON usuario_departamentos(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_usuario_deptos_depto ON usuario_departamentos(departamento_id);
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\02-datos-iniciales.sql
+---
+-- Este archivo se deja mínimo para evitar duplicar DDL del 01.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\03-schema-projects.sql
+---
+-- init-scripts/03-schema-projects.sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS proyectos (
+  id                 SERIAL PRIMARY KEY,
+  uuid               UUID NOT NULL DEFAULT gen_random_uuid(),
+  codigo             TEXT UNIQUE,
+  nombre             TEXT NOT NULL,
+  descripcion        TEXT,
+  organizacion_id    INT REFERENCES organizaciones(id) ON DELETE SET NULL,
+  gerente_proyecto_id INT REFERENCES usuarios(id) ON DELETE SET NULL,
+  sponsor_id         INT REFERENCES usuarios(id) ON DELETE SET NULL,
+  prioridad          SMALLINT NOT NULL DEFAULT 3,
+  estado             TEXT NOT NULL DEFAULT 'EN_PROGRESO',
+  presupuesto_monto  NUMERIC(14,2) DEFAULT 0,
+  avance_pct         NUMERIC(5,2)  DEFAULT 0,
+  fecha_inicio       DATE,
+  fecha_fin_plan     DATE,
+  fecha_fin_real     DATE,
+  activo             BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at         TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_proy_codigo ON proyectos(codigo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_proy_estado ON proyectos(estado) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS tareas (
+  id              SERIAL PRIMARY KEY,
+  uuid            UUID NOT NULL DEFAULT gen_random_uuid(),
+  proyecto_id     INT NOT NULL REFERENCES proyectos(id) ON DELETE CASCADE,
+  titulo          TEXT NOT NULL,
+  descripcion     TEXT,
+  estado          TEXT NOT NULL DEFAULT 'PENDIENTE',
+  prioridad       SMALLINT NOT NULL DEFAULT 3,
+  asignado_a      INT REFERENCES usuarios(id) ON DELETE SET NULL,
+  estimado_horas  NUMERIC(10,2) DEFAULT 0,
+  real_horas      NUMERIC(10,2) DEFAULT 0,
+  fecha_inicio    DATE,
+  fecha_fin_plan  DATE,
+  fecha_fin_real  DATE,
+  activo          BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at      TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_tareas_proyecto ON tareas(proyecto_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tareas_estado ON tareas(estado) WHERE deleted_at IS NULL;
+
+CREATE OR REPLACE VIEW vw_resumen_tareas_por_estado AS
+SELECT
+  p.id AS proyecto_id,
+  p.nombre AS proyecto,
+  t.estado,
+  COUNT(*)::int AS cantidad
+FROM proyectos p
+JOIN tareas t ON t.proyecto_id = p.id AND t.deleted_at IS NULL
+WHERE p.deleted_at IS NULL
+GROUP BY p.id, p.nombre, t.estado
+ORDER BY p.id, t.estado;
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\04-data-demo.sql
+---
+-- init-scripts/04-data-demo.sql
+WITH upsert AS (
+  INSERT INTO proyectos (codigo, nombre, estado, prioridad, presupuesto_monto)
+  VALUES ('DEMO-2024-001','Implementación de Sistema ERP','EN_PROGRESO',2,500000)
+  ON CONFLICT (codigo) DO NOTHING
+  RETURNING id
+)
+INSERT INTO tareas (proyecto_id, titulo, estado, prioridad, estimado_horas)
+SELECT COALESCE((SELECT id FROM upsert), (SELECT id FROM proyectos WHERE codigo='DEMO-2024-001' LIMIT 1)),
+       t.titulo, t.estado, t.prioridad, t.est
+FROM (VALUES
+  ('Análisis de Requerimientos','HECHA',2,16),
+  ('Diseño de Base de Datos','EN_PROGRESO',2,24),
+  ('API de Autenticación','EN_PROGRESO',2,20),
+  ('Gestión de Proyectos (CRUD)','PENDIENTE',3,20),
+  ('Reporte básico','PENDIENTE',3,12)
+) AS t(titulo, estado, prioridad, est);
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\05-initial-data.sql
+---
+-- init-scripts/05-initial-data.sql
+
+-- Roles básicos
+INSERT INTO roles (nombre, descripcion) VALUES 
+('Super Admin', 'Administrador del sistema con todos los permisos'),
+('Admin', 'Administrador con permisos de gestión'),
+('Gerente de Proyecto', 'Gestor de proyectos y equipos'),
+('Líder de Equipo', 'Líder de equipos de trabajo'),
+('Colaborador', 'Usuario colaborador básico')
+ON CONFLICT (nombre) DO NOTHING;
+
+-- Usuario admin inicial (password: admin123) usando pgcrypto (bcrypt)
+INSERT INTO usuarios (email, password_hash, nombre, apellido, activo)
+VALUES ('admin@miempresa.com', crypt('admin123', gen_salt('bf')), 'Administrador', 'Sistema', TRUE)
+ON CONFLICT (email) DO UPDATE
+  SET password_hash = EXCLUDED.password_hash,
+      nombre = EXCLUDED.nombre,
+      apellido = EXCLUDED.apellido,
+      activo = TRUE;
+
+-- Asignar rol Super Admin al admin
+INSERT INTO usuario_roles (usuario_id, rol_id, asignado_por)
+SELECT u.id, r.id, u.id
+FROM usuarios u
+JOIN roles r ON r.nombre = 'Super Admin'
+WHERE u.email = 'admin@miempresa.com'
+ON CONFLICT (usuario_id, rol_id) DO NOTHING;
+
+-- Organización y Departamento demo
+INSERT INTO organizaciones (nombre, razon_social, pais)
+VALUES ('Mi Empresa S.A.', 'Mi Empresa Sociedad Anónima', 'Argentina')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO departamentos (nombre, descripcion, organizacion_id)
+SELECT 'Sistemas', 'Departamento de Tecnología', o.id
+FROM organizaciones o
+WHERE o.nombre = 'Mi Empresa S.A.'
+ON CONFLICT DO NOTHING;
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\06-fix-admin.sql
+---
+-- init-scripts/06-fix-admin.sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Roles base
+INSERT INTO roles (nombre, descripcion) VALUES
+('Super Admin','Administrador del sistema con todos los permisos'),
+('Admin','Administrador con permisos de gestión'),
+('Gerente de Proyecto','Gestor de proyectos y equipos'),
+('Líder de Equipo','Líder de equipos de trabajo'),
+('Colaborador','Usuario colaborador básico')
+ON CONFLICT (nombre) DO NOTHING;
+
+-- Admin inicial
+INSERT INTO usuarios (email, password_hash, nombre, apellido, activo)
+VALUES ('admin@miempresa.com', crypt('admin123', gen_salt('bf')), 'Administrador', 'Sistema', TRUE)
+ON CONFLICT (email) DO UPDATE
+SET password_hash = EXCLUDED.password_hash,
+    nombre = EXCLUDED.nombre,
+    apellido = EXCLUDED.apellido,
+    activo = TRUE;
+
+-- Rol "Super Admin" para el admin
+INSERT INTO usuario_roles (usuario_id, rol_id)
+SELECT u.id, r.id
+FROM usuarios u
+JOIN roles r ON r.nombre = 'Super Admin'
+WHERE u.email = 'admin@miempresa.com'
+AND NOT EXISTS (
+  SELECT 1 FROM usuario_roles ur WHERE ur.usuario_id = u.id AND ur.rol_id = r.id
+);
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\__init__.py
+---
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\config.py
+---
+# api/app/config.py
+from typing import List
+from pydantic import Field, AliasChoices
+from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
+
+DEFAULT_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+]
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
+    # --- App info ---
+    app_name: str = Field("ERP API", validation_alias=AliasChoices("APP_NAME", "app_name"))
+    version: str = Field("1.0.0", validation_alias=AliasChoices("VERSION", "version"))
+    description: str = Field(
+        "Sistema de Gestión Empresarial - API Backend",
+        validation_alias=AliasChoices("DESCRIPTION", "description"),
+    )
+
+    # --- DB (ojo: host 'postgres' es el nombre del servicio en docker-compose) ---
+    database_url: str = Field(
+        "postgresql+asyncpg://erp_user:erp_password123@postgres:5432/erp_db",
+        validation_alias=AliasChoices("DATABASE_URL", "database_url")
+    )
+    database_url_sync: str = Field(
+        "postgresql://erp_user:erp_password123@postgres:5432/erp_db",
+        validation_alias=AliasChoices("DATABASE_URL_SYNC", "database_url_sync")
+    )
+
+    # --- Server ---
+    host: str = Field("0.0.0.0", validation_alias=AliasChoices("HOST", "host"))
+    port: int = Field(8000, validation_alias=AliasChoices("PORT", "port"))
+    debug: bool = Field(True, validation_alias=AliasChoices("DEBUG", "debug"))
+
+    # --- Security ---
+    secret_key: str = Field("cambia-esto-en-produccion", validation_alias=AliasChoices("SECRET_KEY", "secret_key"))
+    algorithm: str = Field("HS256", validation_alias=AliasChoices("ALGORITHM", "algorithm"))
+    access_token_expire_minutes: int = Field(
+        30, validation_alias=AliasChoices("ACCESS_TOKEN_EXPIRE_MINUTES", "access_token_expire_minutes")
+    )
+
+    # --- CORS ---
+    # Leer como string crudo y convertir a lista (soporta JSON o CSV)
+    allowed_origins_raw: str = Field(
+        "", validation_alias=AliasChoices("ALLOWED_ORIGINS", "allowed_origins")
+    )
+
+    # --- Misc ---
+    max_upload_size: int = Field(10 * 1024 * 1024, validation_alias=AliasChoices("MAX_UPLOAD_SIZE", "max_upload_size"))
+    items_per_page: int = Field(50, validation_alias=AliasChoices("ITEMS_PER_PAGE", "items_per_page"))
+
+    @property
+    def allowed_origins(self) -> List[str]:
+        v = (self.allowed_origins_raw or "").strip()
+        if not v:
+            return DEFAULT_ORIGINS
+        # 1) intenta JSON
+        try:
+            data = json.loads(v)
+            if isinstance(data, list):
+                return [str(x).strip() for x in data if str(x).strip()]
+        except Exception:
+            pass
+        # 2) fallback CSV
+        return [s.strip() for s in v.split(",") if s.strip()]
+
+settings = Settings()
+
+def get_database_url() -> str:
+    return settings.database_url
+
+def get_database_url_sync() -> str:
+    return settings.database_url_sync
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\database.py
+---
+# api/app/database.py
+import logging
+from sqlalchemy import create_engine, MetaData, text
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
+from .config import settings
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# --- Motores ---
+async_engine = create_async_engine(
+    settings.database_url,
+    echo=settings.debug,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
+
+sync_engine = create_engine(
+    settings.database_url_sync,
+    echo=settings.debug,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
+
+# --- Sesiones ---
+AsyncSessionLocal = sessionmaker(
+    bind=async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+SessionLocal = sessionmaker(
+    bind=sync_engine,
+    autocommit=False,
+    autoflush=False,
+)
+
+# --- Base & metadata ---
+Base = declarative_base()
+metadata = MetaData()
+
+
+async def get_async_db() -> AsyncSession:
+    """
+    Dependency: sesión async
+    """
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+def get_db():
+    """
+    Dependency: sesión sync
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+async def init_db():
+    """
+    Refleja tablas existentes y valida la conexión.
+    """
+    try:
+        async with async_engine.begin() as conn:
+            # Ejecuta la reflexión en el hilo sync del engine async
+            await conn.run_sync(lambda sc: metadata.reflect(bind=sc))
+            logger.info("✅ Conexión a PostgreSQL OK")
+            logger.info(f"📊 Tablas encontradas: {len(metadata.tables)}")
+            if metadata.tables:
+                logger.info(f"📋 {', '.join(list(metadata.tables.keys()))}")
+    except Exception as e:
+        logger.error(f"❌ Error al conectar/reflejar DB: {e}")
+        raise
+
+
+async def close_db():
+    try:
+        await async_engine.dispose()
+        sync_engine.dispose()
+        logger.info("✅ Conexiones DB cerradas")
+    except Exception as e:
+        logger.error(f"❌ Error al cerrar DB: {e}")
+
+
+async def test_connection() -> bool:
+    """
+    SELECT 1 usando SQLAlchemy 2.0 (text()).
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(text("SELECT 1"))
+            return result.scalar() == 1
+    except Exception as e:
+        logger.error(f"❌ Test de conexión falló: {e}")
+        return False
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\main.py
+---
+# api/app/main.py
+
+from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import logging
+import uvicorn
+
+from .config import settings
+from .database import init_db, close_db, test_connection
+
+# Importar todos los modelos para que SQLAlchemy los registre
+from .auth import models as auth_models
+from .projects import models as project_models
+
+from .auth.routes import auth_router
+from .projects.routes import router as projects_router
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("🚀 Iniciando ERP API...")
+    try:
+        await init_db()
+        if await test_connection():
+            logger.info("✅ Base de datos conectada correctamente")
+        else:
+            logger.error("❌ Error en la conexión a la base de datos")
+    except Exception as e:
+        logger.error(f"❌ Error durante el startup: {str(e)}")
+        raise
+    logger.info("🎉 ERP API iniciada correctamente")
+    yield
+    logger.info("🔄 Cerrando ERP API...")
+    await close_db()
+    logger.info("✅ ERP API cerrada correctamente")
+
+
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.version,
+    description=settings.description,
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc: HTTPException):
+    return JSONResponse(status_code=exc.status_code, content={
+        "detail": exc.detail,
+        "status_code": exc.status_code,
+        "success": False
+    })
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc: Exception):
+    logger.error(f"Error no controlado: {str(exc)}")
+    return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={
+        "detail": "Error interno del servidor",
+        "status_code": 500,
+        "success": False
+    })
+
+
+@app.get("/")
+async def root():
+    return {
+        "message": "ERP System API",
+        "version": settings.version,
+        "status": "active",
+        "docs": "/docs",
+        "redoc": "/redoc"
+    }
+
+
+@app.get("/health")
+async def health_check():
+    try:
+        db_status = await test_connection()
+        return {
+            "status": "healthy" if db_status else "unhealthy",
+            "database": "connected" if db_status else "disconnected",
+            "version": settings.version,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error en health check: {str(e)}")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "unhealthy", "database": "error", "error": str(e), "version": settings.version}
+        )
+
+
+# Routers
+app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"], responses={401: {"description": "Unauthorized"}, 403: {"description": "Forbidden"}})
+app.include_router(projects_router, prefix="/api/projects", tags=["Projects & Tasks"])
+
+
+def start_server():
+    uvicorn.run(
+        "app.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.debug,
+        log_level="info"
+    )
+
+
+if __name__ == "__main__":
+    start_server()
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\auth\__init__.py
+---
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\auth\models.py
+---
+"""
+Modelos SQLAlchemy para autenticación (relaciones desambiguadas)
+"""
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+from ..database import Base
+import uuid
+
+
+class Usuario(Base):
+    __tablename__ = "usuarios"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, index=True)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    nombre = Column(String(100), nullable=False)
+    apellido = Column(String(100), nullable=False)
+    telefono = Column(String(20))
+    activo = Column(Boolean, default=True)
+    ultimo_login = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True))
+
+    # ---- Relaciones con Roles ----
+    # Asignaciones (tabla puente) para crear/borrar
+    usuario_roles = relationship(
+        "UsuarioRol",
+        back_populates="usuario",
+        foreign_keys="UsuarioRol.usuario_id",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        overlaps="usuario,usuarios,roles"
+    )
+    # Vista M2M de roles (solo lectura)
+    roles = relationship(
+        "Rol",
+        secondary="usuario_roles",
+        primaryjoin="Usuario.id == UsuarioRol.usuario_id",
+        secondaryjoin="Rol.id == UsuarioRol.rol_id",
+        back_populates="usuarios",
+        viewonly=True,
+        lazy="selectin",
+        overlaps="usuario_roles,usuarios"
+    )
+
+    # ---- Relaciones con Departamentos ----
+    usuario_departamentos = relationship(
+        "UsuarioDepartamento",
+        back_populates="usuario",
+        foreign_keys="UsuarioDepartamento.usuario_id",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        overlaps="usuario,usuarios,departamentos"
+    )
+    departamentos = relationship(
+        "Departamento",
+        secondary="usuario_departamentos",
+        primaryjoin="Usuario.id == UsuarioDepartamento.usuario_id",
+        secondaryjoin="Departamento.id == UsuarioDepartamento.departamento_id",
+        back_populates="usuarios",
+        viewonly=True,
+        lazy="selectin",
+        overlaps="usuario_departamentos,usuarios"
+    )
+
+    def __repr__(self):
+        return f"<Usuario(id={self.id}, email='{self.email}', nombre='{self.nombre}')>"
+
+    @property
+    def nombre_completo(self) -> str:
+        return f"{self.nombre} {self.apellido}"
+
+
+class Rol(Base):
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String(50), unique=True, nullable=False)
+    descripcion = Column(Text)
+    activo = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True))
+
+    # Asignaciones (tabla puente)
+    usuario_roles = relationship(
+        "UsuarioRol",
+        back_populates="rol",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        overlaps="rol,roles,usuarios"
+    )
+    # Usuarios con este rol (solo lectura)
+    usuarios = relationship(
+        "Usuario",
+        secondary="usuario_roles",
+        primaryjoin="Rol.id == UsuarioRol.rol_id",
+        secondaryjoin="Usuario.id == UsuarioRol.usuario_id",
+        back_populates="roles",
+        viewonly=True,
+        lazy="selectin",
+        overlaps="usuario_roles,roles"
+    )
+
+    def __repr__(self):
+        return f"<Rol(id={self.id}, nombre='{self.nombre}')>"
+
+
+class UsuarioRol(Base):
+    __tablename__ = "usuario_roles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id", ondelete="CASCADE"), nullable=False)
+    rol_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False)
+    asignado_por = Column(Integer, ForeignKey("usuarios.id"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relaciones
+    usuario = relationship(
+        "Usuario",
+        foreign_keys=[usuario_id],
+        back_populates="usuario_roles",
+        overlaps="roles,usuarios"
+    )
+    rol = relationship(
+        "Rol",
+        back_populates="usuario_roles",
+        overlaps="usuarios,roles"
+    )
+    asignado_por_usuario = relationship(
+        "Usuario",
+        foreign_keys=[asignado_por]
+    )
+
+    def __repr__(self):
+        return f"<UsuarioRol(usuario_id={self.usuario_id}, rol_id={self.rol_id})>"
+
+
+class Organizacion(Base):
+    __tablename__ = "organizaciones"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, index=True)
+    nombre = Column(String(255), nullable=False)
+    razon_social = Column(String(255))
+    rfc = Column(String(20))
+    telefono = Column(String(20))
+    email = Column(String(255))
+    direccion = Column(Text)
+    ciudad = Column(String(100))
+    estado = Column(String(100))
+    codigo_postal = Column(String(10))
+    pais = Column(String(100), default="Argentina")
+    activa = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True))
+
+    departamentos = relationship("Departamento", back_populates="organizacion", lazy="selectin")
+
+    def __repr__(self):
+        return f"<Organizacion(id={self.id}, nombre='{self.nombre}')>"
+
+
+class Departamento(Base):
+    __tablename__ = "departamentos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, index=True)
+    nombre = Column(String(100), nullable=False)
+    descripcion = Column(Text)
+    organizacion_id = Column(Integer, ForeignKey("organizaciones.id", ondelete="CASCADE"))
+    departamento_padre_id = Column(Integer, ForeignKey("departamentos.id"))
+    responsable_id = Column(Integer, ForeignKey("usuarios.id"))
+    activo = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True))
+
+    organizacion = relationship("Organizacion", back_populates="departamentos", lazy="joined")
+    responsable = relationship("Usuario")
+    departamento_padre = relationship("Departamento", remote_side="Departamento.id")
+    # Asignaciones (tabla puente)
+    usuarios_asignaciones = relationship(
+        "UsuarioDepartamento",
+        back_populates="departamento",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        overlaps="departamento,usuarios"
+    )
+    # Usuarios (solo lectura)
+    usuarios = relationship(
+        "Usuario",
+        secondary="usuario_departamentos",
+        primaryjoin="Departamento.id == UsuarioDepartamento.departamento_id",
+        secondaryjoin="Usuario.id == UsuarioDepartamento.usuario_id",
+        back_populates="departamentos",
+        viewonly=True,
+        lazy="selectin",
+        overlaps="usuarios_asignaciones,departamentos"
+    )
+
+    def __repr__(self):
+        return f"<Departamento(id={self.id}, nombre='{self.nombre}')>"
+
+
+class UsuarioDepartamento(Base):
+    __tablename__ = "usuario_departamentos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id", ondelete="CASCADE"))
+    departamento_id = Column(Integer, ForeignKey("departamentos.id", ondelete="CASCADE"))
+    es_responsable = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    usuario = relationship(
+        "Usuario",
+        back_populates="usuario_departamentos",
+        foreign_keys=[usuario_id],
+        overlaps="departamentos,usuarios"
+    )
+    departamento = relationship(
+        "Departamento",
+        back_populates="usuarios_asignaciones",
+        foreign_keys=[departamento_id],
+        overlaps="usuarios,departamentos"
+    )
+
+    def __repr__(self):
+        return f"<UsuarioDepartamento(usuario_id={self.usuario_id}, departamento_id={self.departamento_id})>"
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\auth\routes.py
+---
+"""
+Rutas de autenticación
+"""
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from sqlalchemy import select, and_
+from datetime import datetime, timezone
+from typing import List
+import logging
+
+from ..database import get_async_db
+from ..utils.security import verify_password, get_password_hash, create_access_token, create_refresh_token
+from ..utils.dependencies import get_current_active_user, require_roles, get_pagination, Pagination
+from ..config import settings
+from .models import Usuario, Rol, UsuarioRol
+from .schemas import (
+    LoginRequest, LoginResponse, UsuarioCreate, UsuarioUpdate, UsuarioResponse,
+    MessageResponse, ChangePasswordRequest, RolCreate, RolResponse, RolUpdate
+)
+
+logger = logging.getLogger(__name__)
+
+auth_router = APIRouter()
+
+
+@auth_router.post("/login", response_model=LoginResponse)
+async def login(
+    login_data: LoginRequest,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Autenticar usuario y generar tokens JWT
+    """
+    try:
+        stmt = (
+            select(Usuario)
+            .options(
+                selectinload(Usuario.roles),
+                selectinload(Usuario.departamentos),
+            )
+            .where(
+                and_(
+                    Usuario.email == login_data.email.lower(),
+                    Usuario.activo == True
+                )
+            )
+        )
+
+        result = await db.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user or not verify_password(login_data.password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Credenciales incorrectas",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        user.ultimo_login = datetime.now(timezone.utc)
+        await db.commit()
+
+        access_token = create_access_token(data={"sub": str(user.id)})
+        refresh_token = create_refresh_token(user.id)
+
+        user_response = UsuarioResponse.model_validate(user)
+        logger.info(f"Usuario {user.email} autenticado correctamente")
+
+        return LoginResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=settings.access_token_expire_minutes * 60,
+            user=user_response
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error en login: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error interno del servidor"
+        )
+
+
+@auth_router.get("/me", response_model=UsuarioResponse)
+async def get_current_user_info(
+    current_user: Usuario = Depends(get_current_active_user)
+):
+    return UsuarioResponse.model_validate(current_user)
+
+
+@auth_router.put("/me", response_model=UsuarioResponse)
+async def update_current_user(
+    user_update: UsuarioUpdate,
+    current_user: Usuario = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_async_db)
+):
+    try:
+        update_data = user_update.model_dump(exclude_unset=True)
+
+        for field, value in update_data.items():
+            if field == "email":
+                stmt = select(Usuario).where(
+                    and_(Usuario.email == value.lower(), Usuario.id != current_user.id)
+                )
+                result = await db.execute(stmt)
+                if result.scalar_one_or_none():
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="El email ya está en uso"
+                    )
+                setattr(current_user, field, value.lower())
+            else:
+                setattr(current_user, field, value)
+
+        await db.commit()
+        await db.refresh(current_user)
+
+        logger.info(f"Usuario {current_user.email} actualizado")
+        return UsuarioResponse.model_validate(current_user)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error al actualizar usuario: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al actualizar usuario"
+        )
+
+
+@auth_router.post("/change-password", response_model=MessageResponse)
+async def change_password(
+    password_data: ChangePasswordRequest,
+    current_user: Usuario = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_async_db)
+):
+    try:
+        if not verify_password(password_data.current_password, current_user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Contraseña actual incorrecta"
+            )
+
+        if password_data.new_password != password_data.confirm_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Las contraseñas nuevas no coinciden"
+            )
+
+        current_user.password_hash = get_password_hash(password_data.new_password)
+        await db.commit()
+
+        logger.info(f"Contraseña cambiada para usuario {current_user.email}")
+        return MessageResponse(message="Contraseña actualizada correctamente")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error al cambiar contraseña: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al cambiar contraseña"
+        )
+
+
+# ============================================
+# GESTIÓN DE USUARIOS (Solo Admins)
+# ============================================
+
+@auth_router.post("/users", response_model=UsuarioResponse)
+async def create_user(
+    user_data: UsuarioCreate,
+    db: AsyncSession = Depends(get_async_db),
+    current_user: Usuario = Depends(require_roles("Super Admin", "Admin"))
+):
+    try:
+        if user_data.password != user_data.confirm_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Las contraseñas no coinciden"
+            )
+
+        stmt = select(Usuario).where(Usuario.email == user_data.email.lower())
+        result = await db.execute(stmt)
+        if result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El email ya está registrado"
+            )
+
+        new_user = Usuario(
+            email=user_data.email.lower(),
+            password_hash=get_password_hash(user_data.password),
+            nombre=user_data.nombre,
+            apellido=user_data.apellido,
+            telefono=user_data.telefono
+        )
+        db.add(new_user)
+        await db.flush()  # obtener ID
+
+        # Asignar roles (creando filas en usuario_roles)
+        for role_id in (user_data.roles or []):
+            role = (await db.execute(select(Rol).where(and_(Rol.id == role_id, Rol.activo == True)))).scalar_one_or_none()
+            if role:
+                db.add(UsuarioRol(usuario_id=new_user.id, rol_id=role_id, asignado_por=current_user.id))
+
+        await db.commit()
+        await db.refresh(new_user)
+
+        # Recargar con relaciones M2M resueltas
+        new_user = (await db.execute(
+            select(Usuario)
+            .options(selectinload(Usuario.roles), selectinload(Usuario.departamentos))
+            .where(Usuario.id == new_user.id))
+        ).scalar_one()
+
+        logger.info(f"Usuario creado: {new_user.email} por {current_user.email}")
+        return UsuarioResponse.model_validate(new_user)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error al crear usuario: {str(e)}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al crear usuario"
+        )
+
+
+@auth_router.get("/users", response_model=List[UsuarioResponse])
+async def list_users(
+    pagination: Pagination = Depends(get_pagination),
+    db: AsyncSession = Depends(get_async_db),
+    current_user: Usuario = Depends(require_roles("Super Admin", "Admin"))
+):
+    try:
+        stmt = (
+            select(Usuario)
+            .options(selectinload(Usuario.roles), selectinload(Usuario.departamentos))
+            .offset(pagination.offset).limit(pagination.per_page)
+        )
+        result = await db.execute(stmt)
+        users = result.scalars().all()
+        return [UsuarioResponse.model_validate(user) for user in users]
+
+    except Exception as e:
+        logger.error(f"Error al listar usuarios: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al obtener usuarios"
+        )
+
+
+# ============================================
+# GESTIÓN DE ROLES
+# ============================================
+
+@auth_router.get("/roles", response_model=List[RolResponse])
+async def list_roles(
+    db: AsyncSession = Depends(get_async_db),
+    current_user: Usuario = Depends(get_current_active_user)
+):
+    try:
+        roles = (await db.execute(select(Rol).where(Rol.activo == True))).scalars().all()
+        return [RolResponse.model_validate(role) for role in roles]
+    except Exception as e:
+        logger.error(f"Error al listar roles: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al obtener roles"
+        )
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\auth\schemas.py
+---
+"""
+Schemas Pydantic para autenticación y validación
+"""
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, List
+from datetime import datetime
+import uuid
+
+
+# ============================================
+# SCHEMAS DE AUTENTICACIÓN
+# ============================================
+
+class LoginRequest(BaseModel):
+    """Schema para login"""
+    email: EmailStr
+    password: str = Field(..., min_length=6, description="Contraseña mínimo 6 caracteres")
+
+
+class LoginResponse(BaseModel):
+    """Schema de respuesta de login"""
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: "UsuarioResponse"
+
+
+class RefreshTokenRequest(BaseModel):
+    """Schema para refresh token"""
+    refresh_token: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """Schema para cambio de contraseña"""
+    current_password: str
+    new_password: str = Field(..., min_length=6)
+    confirm_password: str
+
+
+# ============================================
+# SCHEMAS DE USUARIO
+# ============================================
+
+class UsuarioBase(BaseModel):
+    """Schema base de usuario"""
+    email: EmailStr
+    nombre: str = Field(..., min_length=2, max_length=100)
+    apellido: str = Field(..., min_length=2, max_length=100)
+    telefono: Optional[str] = Field(None, max_length=20)
+
+
+class UsuarioCreate(UsuarioBase):
+    """Schema para crear usuario"""
+    password: str = Field(..., min_length=6, description="Contraseña mínimo 6 caracteres")
+    confirm_password: str
+    roles: Optional[List[int]] = Field(default=[], description="IDs de roles")
+    departamentos: Optional[List[int]] = Field(default=[], description="IDs de departamentos")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "email": "usuario@empresa.com",
+                "nombre": "Juan",
+                "apellido": "Pérez",
+                "telefono": "+52 55 1234-5678",
+                "password": "password123",
+                "confirm_password": "password123",
+                "roles": [3],  # ID del rol "Colaborador"
+                "departamentos": [2]  # ID del departamento
+            }
+        }
+
+
+class UsuarioUpdate(BaseModel):
+    """Schema para actualizar usuario"""
+    email: Optional[EmailStr] = None
+    nombre: Optional[str] = Field(None, min_length=2, max_length=100)
+    apellido: Optional[str] = Field(None, min_length=2, max_length=100)
+    telefono: Optional[str] = Field(None, max_length=20)
+    activo: Optional[bool] = None
+
+
+class UsuarioResponse(BaseModel):
+    """Schema de respuesta de usuario"""
+    id: int
+    uuid: uuid.UUID
+    email: str
+    nombre: str
+    apellido: str
+    nombre_completo: str
+    telefono: Optional[str]
+    activo: bool
+    ultimo_login: Optional[datetime]
+    created_at: datetime
+    roles: List["RolResponse"] = []
+    departamentos: List["DepartamentoSimple"] = []
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# SCHEMAS DE ROL
+# ============================================
+
+class RolBase(BaseModel):
+    """Schema base de rol"""
+    nombre: str = Field(..., min_length=2, max_length=50)
+    descripcion: Optional[str] = None
+
+
+class RolCreate(RolBase):
+    """Schema para crear rol"""
+    pass
+
+
+class RolUpdate(BaseModel):
+    """Schema para actualizar rol"""
+    nombre: Optional[str] = Field(None, min_length=2, max_length=50)
+    descripcion: Optional[str] = None
+    activo: Optional[bool] = None
+
+
+class RolResponse(BaseModel):
+    """Schema de respuesta de rol"""
+    id: int
+    nombre: str
+    descripcion: Optional[str]
+    activo: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# SCHEMAS DE ORGANIZACIÓN
+# ============================================
+
+class OrganizacionBase(BaseModel):
+    """Schema base de organización"""
+    nombre: str = Field(..., min_length=2, max_length=255)
+    razon_social: Optional[str] = Field(None, max_length=255)
+    rfc: Optional[str] = Field(None, max_length=20)
+    telefono: Optional[str] = Field(None, max_length=20)
+    email: Optional[EmailStr] = None
+    direccion: Optional[str] = None
+    ciudad: Optional[str] = Field(None, max_length=100)
+    estado: Optional[str] = Field(None, max_length=100)
+    codigo_postal: Optional[str] = Field(None, max_length=10)
+    pais: str = Field(default="Argentina", max_length=100)
+
+
+class OrganizacionCreate(OrganizacionBase):
+    """Schema para crear organización"""
+    pass
+
+
+class OrganizacionUpdate(BaseModel):
+    """Schema para actualizar organización"""
+    nombre: Optional[str] = Field(None, min_length=2, max_length=255)
+    razon_social: Optional[str] = Field(None, max_length=255)
+    rfc: Optional[str] = Field(None, max_length=20)
+    telefono: Optional[str] = Field(None, max_length=20)
+    email: Optional[EmailStr] = None
+    direccion: Optional[str] = None
+    ciudad: Optional[str] = Field(None, max_length=100)
+    estado: Optional[str] = Field(None, max_length=100)
+    codigo_postal: Optional[str] = Field(None, max_length=10)
+    pais: Optional[str] = Field(None, max_length=100)
+    activa: Optional[bool] = None
+
+
+class OrganizacionResponse(BaseModel):
+    """Schema de respuesta de organización"""
+    id: int
+    uuid: uuid.UUID
+    nombre: str
+    razon_social: Optional[str]
+    rfc: Optional[str]
+    telefono: Optional[str]
+    email: Optional[str]
+    direccion: Optional[str]
+    ciudad: Optional[str]
+    estado: Optional[str]
+    codigo_postal: Optional[str]
+    pais: str
+    activa: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# SCHEMAS DE DEPARTAMENTO
+# ============================================
+
+class DepartamentoBase(BaseModel):
+    """Schema base de departamento"""
+    nombre: str = Field(..., min_length=2, max_length=100)
+    descripcion: Optional[str] = None
+
+
+class DepartamentoCreate(DepartamentoBase):
+    """Schema para crear departamento"""
+    organizacion_id: int
+    departamento_padre_id: Optional[int] = None
+    responsable_id: Optional[int] = None
+
+
+class DepartamentoUpdate(BaseModel):
+    """Schema para actualizar departamento"""
+    nombre: Optional[str] = Field(None, min_length=2, max_length=100)
+    descripcion: Optional[str] = None
+    responsable_id: Optional[int] = None
+    activo: Optional[bool] = None
+
+
+class DepartamentoSimple(BaseModel):
+    """Schema simple de departamento"""
+    id: int
+    nombre: str
+    descripcion: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+class DepartamentoResponse(BaseModel):
+    """Schema de respuesta de departamento"""
+    id: int
+    uuid: uuid.UUID
+    nombre: str
+    descripcion: Optional[str]
+    organizacion_id: int
+    departamento_padre_id: Optional[int]
+    responsable_id: Optional[int]
+    activo: bool
+    created_at: datetime
+    responsable: Optional["UsuarioResponse"] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ============================================
+# SCHEMAS GENERALES
+# ============================================
+
+class MessageResponse(BaseModel):
+    """Schema para respuestas de mensaje"""
+    message: str
+    success: bool = True
+
+
+class ErrorResponse(BaseModel):
+    """Schema para respuestas de error"""
+    detail: str
+    error_code: Optional[str] = None
+    success: bool = False
+
+
+class PaginatedResponse(BaseModel):
+    """Schema para respuestas paginadas"""
+    items: List[BaseModel]
+    total: int
+    page: int = 1
+    per_page: int = 50
+    pages: int
+    has_next: bool
+    has_prev: bool
+
+
+# ============================================
+# CONFIGURAR FORWARD REFERENCES
+# ============================================
+
+# Actualizar forward references
+UsuarioResponse.model_rebuild()
+LoginResponse.model_rebuild()
+DepartamentoResponse.model_rebuild()
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\projects\__init__.py
+---
+# Exponer router y modelos del módulo projects
+from .routes import router
+from .models import Proyecto, Tarea
+
+__all__ = ["router", "Proyecto", "Tarea"]
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\projects\models.py
+---
+from sqlalchemy import Column, Integer, String, Text, Boolean, Date, DateTime, Numeric, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+from ..database import Base
+import uuid
+
+class Proyecto(Base):
+    __tablename__ = "proyectos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, index=True)
+    codigo = Column(String, unique=True)
+    nombre = Column(String, nullable=False)
+    descripcion = Column(Text)
+    organizacion_id = Column(Integer, ForeignKey("organizaciones.id", ondelete="SET NULL"))
+    gerente_proyecto_id = Column(Integer, ForeignKey("usuarios.id", ondelete="SET NULL"))
+    sponsor_id = Column(Integer, ForeignKey("usuarios.id", ondelete="SET NULL"))
+    prioridad = Column(Integer, default=3)
+    estado = Column(String, default="EN_PROGRESO")
+    presupuesto_monto = Column(Numeric(14, 2), default=0)
+    avance_pct = Column(Numeric(5, 2), default=0)
+    fecha_inicio = Column(Date)
+    fecha_fin_plan = Column(Date)
+    fecha_fin_real = Column(Date)
+    activo = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True))
+
+    tareas = relationship("Tarea", back_populates="proyecto")
+
+    def __repr__(self):
+        return f"<Proyecto(id={self.id}, nombre='{self.nombre}')>"
+
+class Tarea(Base):
+    __tablename__ = "tareas"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, index=True)
+    proyecto_id = Column(Integer, ForeignKey("proyectos.id", ondelete="CASCADE"), nullable=False)
+    titulo = Column(String, nullable=False)
+    descripcion = Column(Text)
+    estado = Column(String, default="PENDIENTE")
+    prioridad = Column(Integer, default=3)
+    asignado_a = Column(Integer, ForeignKey("usuarios.id", ondelete="SET NULL"))
+    estimado_horas = Column(Numeric(10, 2), default=0)
+    real_horas = Column(Numeric(10, 2), default=0)
+    fecha_inicio = Column(Date)
+    fecha_fin_plan = Column(Date)
+    fecha_fin_real = Column(Date)
+    activo = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime(timezone=True))
+
+    proyecto = relationship("Proyecto", back_populates="tareas")
+
+    def __repr__(self):
+        return f"<Tarea(id={self.id}, titulo='{self.titulo}')>"
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\projects\routes.py
+---
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
+from ..database import get_async_db
+from ..utils.dependencies import get_current_active_user
+from .models import Proyecto, Tarea
+from .schemas import (
+    ProyectoCreate, ProyectoUpdate, ProyectoResponse,
+    TareaCreate, TareaUpdate, TareaResponse, ResumenEstadoItem
+)
+
+router = APIRouter()
+
+# ---- PROYECTOS ----
+@router.post("", response_model=ProyectoResponse)
+async def create_project(data: ProyectoCreate, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+    p = Proyecto(
+        codigo=data.codigo,
+        nombre=data.nombre,
+        descripcion=data.descripcion,
+        prioridad=data.prioridad or 3
+    )
+    db.add(p)
+    await db.flush()
+    await db.commit()
+    await db.refresh(p)
+    return ProyectoResponse.model_validate(p)
+
+@router.get("", response_model=list[ProyectoResponse])
+async def list_projects(db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+    result = await db.execute(select(Proyecto).where(Proyecto.deleted_at.is_(None)))
+    items = result.scalars().all()
+    return [ProyectoResponse.model_validate(i) for i in items]
+
+@router.get("/{project_id}", response_model=ProyectoResponse)
+async def get_project(project_id: int, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+    result = await db.execute(select(Proyecto).where(Proyecto.id == project_id, Proyecto.deleted_at.is_(None)))
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    return ProyectoResponse.model_validate(p)
+
+@router.patch("/{project_id}", response_model=ProyectoResponse)
+async def update_project(project_id: int, data: ProyectoUpdate, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+    result = await db.execute(select(Proyecto).where(Proyecto.id == project_id, Proyecto.deleted_at.is_(None)))
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    for k, v in data.model_dump(exclude_unset=True).items():
+        setattr(p, k, v)
+    await db.commit()
+    await db.refresh(p)
+    return ProyectoResponse.model_validate(p)
+
+# ---- TAREAS ----
+@router.post("/tasks", response_model=TareaResponse)
+async def create_task(data: TareaCreate, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+    # validar proyecto
+    result = await db.execute(select(Proyecto.id).where(Proyecto.id == data.proyecto_id, Proyecto.deleted_at.is_(None)))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Proyecto no existe")
+    t = Tarea(
+        proyecto_id=data.proyecto_id,
+        titulo=data.titulo,
+        descripcion=data.descripcion,
+        prioridad=data.prioridad or 3
+    )
+    db.add(t)
+    await db.flush()
+    await db.commit()
+    await db.refresh(t)
+    return TareaResponse.model_validate(t)
+
+@router.get("/{project_id}/tasks", response_model=list[TareaResponse])
+async def list_tasks(project_id: int, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+    result = await db.execute(select(Tarea).where(Tarea.proyecto_id == project_id, Tarea.deleted_at.is_(None)))
+    items = result.scalars().all()
+    return [TareaResponse.model_validate(i) for i in items]
+
+@router.patch("/tasks/{task_id}", response_model=TareaResponse)
+async def update_task(task_id: int, data: TareaUpdate, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+    result = await db.execute(select(Tarea).where(Tarea.id == task_id, Tarea.deleted_at.is_(None)))
+    t = result.scalar_one_or_none()
+    if not t:
+        raise HTTPException(status_code=404, detail="Tarea no encontrada")
+    for k, v in data.model_dump(exclude_unset=True).items():
+        setattr(t, k, v)
+    await db.commit()
+    await db.refresh(t)
+    return TareaResponse.model_validate(t)
+
+# ---- Reporte simple (vista) ----
+@router.get("/{project_id}/report/estado", response_model=list[ResumenEstadoItem])
+async def resumen_por_estado(project_id: int, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+    q = text("""
+        SELECT proyecto_id, proyecto, estado, cantidad
+        FROM vw_resumen_tareas_por_estado
+        WHERE proyecto_id = :pid
+        ORDER BY estado
+    """)
+    result = await db.execute(q, {"pid": project_id})
+    rows = result.mappings().all()
+    return [ResumenEstadoItem(**dict(r)) for r in rows]
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\projects\schemas.py
+---
+# api/app/projects/schemas.py
+from pydantic import BaseModel, Field
+from typing import Optional
+from datetime import date
+import uuid
+
+class ProyectoCreate(BaseModel):
+    codigo: Optional[str] = None
+    nombre: str = Field(..., min_length=2)
+    descripcion: Optional[str] = None
+    prioridad: Optional[int] = 3
+
+class ProyectoUpdate(BaseModel):
+    nombre: Optional[str] = None
+    descripcion: Optional[str] = None
+    prioridad: Optional[int] = None
+    estado: Optional[str] = None
+    presupuesto_monto: Optional[float] = None
+    avance_pct: Optional[float] = None
+    fecha_inicio: Optional[date] = None
+    fecha_fin_plan: Optional[date] = None
+    fecha_fin_real: Optional[date] = None
+
+class ProyectoResponse(BaseModel):
+    id: int
+    uuid: uuid.UUID
+    codigo: Optional[str]
+    nombre: str
+    estado: str
+    prioridad: int
+    avance_pct: float | None
+    presupuesto_monto: float | None
+    class Config:
+        from_attributes = True
+
+class TareaCreate(BaseModel):
+    proyecto_id: int
+    titulo: str
+    descripcion: Optional[str] = None
+    prioridad: Optional[int] = 3
+
+class TareaUpdate(BaseModel):
+    titulo: Optional[str] = None
+    descripcion: Optional[str] = None
+    prioridad: Optional[int] = None
+    estado: Optional[str] = None
+    real_horas: Optional[float] = None
+    fecha_fin_real: Optional[date] = None
+
+class TareaResponse(BaseModel):
+    id: int
+    uuid: uuid.UUID
+    proyecto_id: int
+    titulo: str
+    estado: str
+    prioridad: int
+    real_horas: float | None
+    class Config:
+        from_attributes = True
+
+class ResumenEstadoItem(BaseModel):
+    proyecto_id: int
+    proyecto: str
+    estado: str
+    cantidad: int
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\utils\__init__.py
+---
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\utils\dependencies.py
+---
+# api/app/utils/dependencies.py
+from typing import Optional, Callable
+import logging
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from sqlalchemy import select
+
+from ..database import get_async_db
+from ..auth.models import Usuario
+from ..utils.security import get_user_id_from_token
+
+logger = logging.getLogger(__name__)
+
+security = HTTPBearer(auto_error=True)
+optional_security = HTTPBearer(auto_error=False)
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_async_db),
+) -> Usuario:
+    """
+    Devuelve el usuario autenticado a partir del token.
+    """
+    try:
+        user_id = get_user_id_from_token(credentials.credentials)
+
+        stmt = (
+            select(Usuario)
+            .options(
+                selectinload(Usuario.roles),
+                selectinload(Usuario.departamentos),
+            )
+            .where(Usuario.id == user_id, Usuario.activo == True)
+        )
+
+        result = await db.execute(stmt)
+        user = result.scalar_one_or_none()
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Usuario no encontrado o inactivo",
+            )
+        return user
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error obteniendo usuario actual: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas"
+        ) from e
+
+
+async def get_current_active_user(
+    current_user: Usuario = Depends(get_current_user),
+) -> Usuario:
+    if not current_user.activo:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Usuario inactivo"
+        )
+    return current_user
+
+
+def require_roles(*required_roles: str) -> Callable[..., Usuario]:
+    """
+    Dependencia para exigir uno de los roles indicados.
+    """
+    async def checker(
+        current_user: Usuario = Depends(get_current_active_user),
+    ) -> Usuario:
+        user_roles = [r.nombre for r in current_user.roles if r and r.activo]
+        if not any(role in user_roles for role in required_roles):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Se requiere uno de los roles: {', '.join(required_roles)}",
+            )
+        return current_user
+
+    return checker
+
+
+def require_permissions(*permissions: str) -> Callable[..., Usuario]:
+    """
+    Dependencia sencilla basada en roles -> permisos.
+    """
+    perm_map = {
+        "read:users": ["Admin", "Gerente de Proyecto", "Líder de Equipo"],
+        "write:users": ["Super Admin", "Admin"],
+        "read:projects": ["Admin", "Gerente de Proyecto", "Líder de Equipo", "Colaborador"],
+        "write:projects": ["Admin", "Gerente de Proyecto"],
+        "read:tasks": ["Admin", "Gerente de Proyecto", "Líder de Equipo", "Colaborador"],
+        "write:tasks": ["Admin", "Gerente de Proyecto", "Líder de Equipo"],
+        "read:reports": ["Admin", "Gerente de Proyecto"],
+        "write:reports": ["Admin", "Gerente de Proyecto"],
+    }
+
+    async def checker(
+        current_user: Usuario = Depends(get_current_active_user),
+    ) -> Usuario:
+        user_roles = [r.nombre for r in current_user.roles if r and r.activo]
+        if "Super Admin" in user_roles:
+            return current_user
+
+        for p in permissions:
+            allowed = perm_map.get(p, [])
+            if not any(r in user_roles for r in allowed):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Permisos insuficientes. Falta: {p}",
+                )
+        return current_user
+
+    return checker
+
+
+async def get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
+    db: AsyncSession = Depends(get_async_db),
+) -> Optional[Usuario]:
+    """
+    Devuelve el usuario si trae token; si no, None.
+    """
+    if not credentials:
+        return None
+    try:
+        return await get_current_user(credentials, db)
+    except Exception:
+        return None
+
+
+class Pagination:
+    """
+    Paginación simple: limita per_page a [1..100]
+    """
+    def __init__(self, page: int = 1, per_page: int = 50):
+        self.page = max(1, page)
+        self.per_page = min(max(1, per_page), 100)
+        self.offset = (self.page - 1) * self.per_page
+
+    def params(self) -> dict:
+        return {"limit": self.per_page, "offset": self.offset}
+
+
+def get_pagination(page: int = 1, per_page: int = 50) -> Pagination:
+    """
+    Dependencia que devuelve un objeto Pagination.
+    """
+    return Pagination(page, per_page)
+
+
+---
+Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\utils\security.py
+---
+# api/app/utils/security.py
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional, Dict
+
+from jose import jwt, JWTError
+from passlib.context import CryptContext
+
+from ..config import settings
+
+# BCrypt para hash/verify
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    try:
+        return pwd_context.verify(plain_password, password_hash)
+    except Exception:
+        return False
+
+
+def _jwt_encode(claims: Dict[str, Any]) -> str:
+    """
+    Encapsula el encode, usa secret y algorithm de settings.
+    """
+    return jwt.encode(claims, settings.secret_key, algorithm=settings.algorithm)
+
+
+def _jwt_decode(token: str) -> Dict[str, Any]:
+    """
+    Decodifica y valida firma/exp.
+    Lanza JWTError si no es válido.
+    """
+    return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+
+
+def create_access_token(data: Dict[str, Any], expires_minutes: Optional[int] = None) -> str:
+    """
+    Crea un access token JWT.
+    Debe incluir data["sub"] como string o int del user_id.
+    """
+    to_encode = data.copy()
+
+    exp_minutes = expires_minutes if expires_minutes is not None else settings.access_token_expire_minutes
+    expire = datetime.now(timezone.utc) + timedelta(minutes=int(exp_minutes))
+
+    # Recomendación: asegurar string en "sub"
+    if "sub" in to_encode:
+        to_encode["sub"] = str(to_encode["sub"])
+
+    to_encode.update({"exp": expire, "type": "access"})
+    return _jwt_encode(to_encode)
+
+
+def create_refresh_token(user_id: int, days: int = 30) -> str:
+    """
+    Crea un refresh token simple.
+    """
+    expire = datetime.now(timezone.utc) + timedelta(days=days)
+    to_encode = {"sub": str(user_id), "exp": expire, "type": "refresh"}
+    return _jwt_encode(to_encode)
+
+
+def get_user_id_from_token(token: str) -> int:
+    """
+    Devuelve el user_id (int) desde "sub" del JWT.
+    Lanza JWTError si es inválido/expirado.
+    """
+    try:
+        payload = _jwt_decode(token)
+        sub = payload.get("sub")
+        if sub is None:
+            raise JWTError("Token sin 'sub'")
+        return int(sub)
+    except Exception as e:
+        # Re-empaquetar como JWTError para que los callers traten 401
+        raise JWTError(f"Token inválido: {e}") from e
+
+

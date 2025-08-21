@@ -10,13 +10,18 @@ from typing import List
 import logging
 
 from ..database import get_async_db
-from ..utils.security import verify_password, get_password_hash, create_access_token, create_refresh_token
+from ..utils.security import (
+    verify_password, get_password_hash,
+    create_access_token, create_refresh_token,
+    get_user_id_from_refresh_token
+)
 from ..utils.dependencies import get_current_active_user, require_roles, get_pagination, Pagination
 from ..config import settings
 from .models import Usuario, Rol, UsuarioRol
 from .schemas import (
     LoginRequest, LoginResponse, UsuarioCreate, UsuarioUpdate, UsuarioResponse,
-    MessageResponse, ChangePasswordRequest, RolCreate, RolResponse, RolUpdate
+    MessageResponse, ChangePasswordRequest, RolCreate, RolResponse, RolUpdate,
+    RefreshTokenRequest
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +85,49 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error interno del servidor"
+        )
+
+
+@auth_router.post("/refresh", response_model=LoginResponse)
+async def refresh_tokens(
+    payload: RefreshTokenRequest,
+    db: AsyncSession = Depends(get_async_db)
+):
+    """
+    Intercambia un refresh token válido por un nuevo access token (y un refresh nuevo).
+    Devuelve el usuario para que el front mantenga el estado actualizado.
+    """
+    try:
+        user_id = get_user_id_from_refresh_token(payload.refresh_token)
+
+        # Traer usuario activo + relaciones básicas
+        stmt = (
+            select(Usuario)
+            .options(selectinload(Usuario.roles), selectinload(Usuario.departamentos))
+            .where(and_(Usuario.id == user_id, Usuario.activo == True))
+        )
+        result = await db.execute(stmt)
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inválido o inactivo")
+
+        # Emitir tokens nuevos
+        new_access = create_access_token({"sub": str(user.id)})
+        new_refresh = create_refresh_token(user.id)
+
+        return LoginResponse(
+            access_token=new_access,
+            refresh_token=new_refresh,
+            expires_in=settings.access_token_expire_minutes * 60,
+            user=UsuarioResponse.model_validate(user)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error en refresh: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token inválido o expirado"
         )
 
 

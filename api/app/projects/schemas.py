@@ -1,6 +1,6 @@
 # api/app/projects/schemas.py
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Dict, List
 from datetime import date
 import uuid
 
@@ -63,3 +63,14 @@ class ResumenEstadoItem(BaseModel):
     proyecto: str
     estado: str
     cantidad: int
+
+# ==== Opcionales de conveniencia ====
+
+class ProyectoSummary(BaseModel):
+    proyecto: ProyectoResponse
+    total_tareas: int
+    por_estado: Dict[str, int]
+    tareas: List[TareaResponse]
+
+class ProyectoStateUpdate(BaseModel):
+    estado: Optional[str] = None

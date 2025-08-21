@@ -32,7 +32,7 @@ def _jwt_encode(claims: Dict[str, Any]) -> str:
 def _jwt_decode(token: str) -> Dict[str, Any]:
     """
     Decodifica y valida firma/exp.
-    Lanza JWTError si no es válido.
+    Lanza JWTError si no es válido/expirado.
     """
     return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
 
@@ -47,7 +47,7 @@ def create_access_token(data: Dict[str, Any], expires_minutes: Optional[int] = N
     exp_minutes = expires_minutes if expires_minutes is not None else settings.access_token_expire_minutes
     expire = datetime.now(timezone.utc) + timedelta(minutes=int(exp_minutes))
 
-    # Recomendación: asegurar string en "sub"
+    # Asegurar string en "sub"
     if "sub" in to_encode:
         to_encode["sub"] = str(to_encode["sub"])
 
@@ -64,17 +64,28 @@ def create_refresh_token(user_id: int, days: int = 30) -> str:
     return _jwt_encode(to_encode)
 
 
-def get_user_id_from_token(token: str) -> int:
+def get_user_id_from_token(token: str, expected_type: Optional[str] = "access") -> int:
     """
     Devuelve el user_id (int) desde "sub" del JWT.
+    Si expected_type es "access" o "refresh", exige ese tipo.
     Lanza JWTError si es inválido/expirado.
     """
     try:
         payload = _jwt_decode(token)
+        tok_type = payload.get("type")
         sub = payload.get("sub")
         if sub is None:
             raise JWTError("Token sin 'sub'")
+        if expected_type and tok_type != expected_type:
+            raise JWTError(f"Tipo de token inválido: se esperaba '{expected_type}', vino '{tok_type}'")
         return int(sub)
     except Exception as e:
         # Re-empaquetar como JWTError para que los callers traten 401
         raise JWTError(f"Token inválido: {e}") from e
+
+
+def get_user_id_from_refresh_token(token: str) -> int:
+    """
+    Helper explícito para refresh tokens.
+    """
+    return get_user_id_from_token(token, expected_type="refresh")
