@@ -1,0 +1,17 @@
+# dependencias / caches
+__pycache__/
+*.pyc
+node_modules/
+*.log
+
+# entornos / secretos locales
+api/.env
+.env
+
+# datos locales de postgres
+pgdata/
+
+# artefactos de editor/OS
+.DS_Store
+.vscode/
+.idea/

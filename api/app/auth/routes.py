@@ -34,9 +34,6 @@ async def login(
     login_data: LoginRequest,
     db: AsyncSession = Depends(get_async_db)
 ):
-    """
-    Autenticar usuario y generar tokens JWT
-    """
     try:
         stmt = (
             select(Usuario)
@@ -89,38 +86,43 @@ async def login(
 
 
 @auth_router.post("/refresh", response_model=LoginResponse)
-async def refresh_tokens(
-    payload: RefreshTokenRequest,
+async def refresh_token(
+    data: RefreshTokenRequest,
     db: AsyncSession = Depends(get_async_db)
 ):
     """
-    Intercambia un refresh token válido por un nuevo access token (y un refresh nuevo).
-    Devuelve el usuario para que el front mantenga el estado actualizado.
+    Recibe refresh_token válido, devuelve nuevo access_token y **rota** refresh_token.
     """
     try:
-        user_id = get_user_id_from_refresh_token(payload.refresh_token)
+        user_id = get_user_id_from_refresh_token(data.refresh_token)
 
-        # Traer usuario activo + relaciones básicas
         stmt = (
             select(Usuario)
-            .options(selectinload(Usuario.roles), selectinload(Usuario.departamentos))
+            .options(
+                selectinload(Usuario.roles),
+                selectinload(Usuario.departamentos),
+            )
             .where(and_(Usuario.id == user_id, Usuario.activo == True))
         )
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()
         if not user:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inválido o inactivo")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh inválido o usuario inactivo"
+            )
 
-        # Emitir tokens nuevos
-        new_access = create_access_token({"sub": str(user.id)})
-        new_refresh = create_refresh_token(user.id)
+        # Generar tokens
+        access_token = create_access_token({"sub": str(user.id)})
+        new_refresh_token = create_refresh_token(user.id)
 
         return LoginResponse(
-            access_token=new_access,
-            refresh_token=new_refresh,
+            access_token=access_token,
+            refresh_token=new_refresh_token,  # rotación
             expires_in=settings.access_token_expire_minutes * 60,
             user=UsuarioResponse.model_validate(user)
         )
+
     except HTTPException:
         raise
     except Exception as e:
@@ -248,9 +250,9 @@ async def create_user(
             telefono=user_data.telefono
         )
         db.add(new_user)
-        await db.flush()  # obtener ID
+        await db.flush()
 
-        # Asignar roles (creando filas en usuario_roles)
+        # Asignar roles
         for role_id in (user_data.roles or []):
             role = (await db.execute(select(Rol).where(and_(Rol.id == role_id, Rol.activo == True)))).scalar_one_or_none()
             if role:
@@ -259,7 +261,6 @@ async def create_user(
         await db.commit()
         await db.refresh(new_user)
 
-        # Recargar con relaciones M2M resueltas
         new_user = (await db.execute(
             select(Usuario)
             .options(selectinload(Usuario.roles), selectinload(Usuario.departamentos))
