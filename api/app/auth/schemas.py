@@ -276,6 +276,13 @@ class PaginatedResponse(BaseModel):
 # ============================================
 # CONFIGURAR FORWARD REFERENCES
 # ============================================
+# ... imports y clases previas ...
+
+class TokenRefreshResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
 
 # Actualizar forward references
 UsuarioResponse.model_rebuild()

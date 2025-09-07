@@ -23,6 +23,9 @@ from .schemas import (
     MessageResponse, ChangePasswordRequest, RolCreate, RolResponse, RolUpdate,
     RefreshTokenRequest
 )
+from jose import JWTError
+from ..utils.security import verify_password, get_password_hash, create_access_token, create_refresh_token, get_user_id_from_refresh_token
+from .schemas import RefreshTokenRequest, TokenRefreshResponse
 
 logger = logging.getLogger(__name__)
 
@@ -85,52 +88,31 @@ async def login(
         )
 
 
-@auth_router.post("/refresh", response_model=LoginResponse)
+@auth_router.post("/refresh", response_model=TokenRefreshResponse)
 async def refresh_token(
-    data: RefreshTokenRequest,
+    payload: RefreshTokenRequest,
     db: AsyncSession = Depends(get_async_db)
 ):
-    """
-    Recibe refresh_token válido, devuelve nuevo access_token y **rota** refresh_token.
-    """
     try:
-        user_id = get_user_id_from_refresh_token(data.refresh_token)
+        user_id = get_user_id_from_refresh_token(payload.refresh_token)
 
-        stmt = (
-            select(Usuario)
-            .options(
-                selectinload(Usuario.roles),
-                selectinload(Usuario.departamentos),
-            )
-            .where(and_(Usuario.id == user_id, Usuario.activo == True))
+        result = await db.execute(
+            select(Usuario).where(Usuario.id == user_id, Usuario.activo == True)
         )
-        result = await db.execute(stmt)
         user = result.scalar_one_or_none()
         if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Refresh inválido o usuario inactivo"
-            )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inválido")
 
-        # Generar tokens
-        access_token = create_access_token({"sub": str(user.id)})
-        new_refresh_token = create_refresh_token(user.id)
-
-        return LoginResponse(
-            access_token=access_token,
-            refresh_token=new_refresh_token,  # rotación
+        new_access = create_access_token(data={"sub": str(user.id)})
+        return TokenRefreshResponse(
+            access_token=new_access,
             expires_in=settings.access_token_expire_minutes * 60,
-            user=UsuarioResponse.model_validate(user)
         )
-
-    except HTTPException:
-        raise
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token inválido o expirado")
     except Exception as e:
         logger.error(f"Error en refresh: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token inválido o expirado"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno del servidor")
 
 
 @auth_router.get("/me", response_model=UsuarioResponse)

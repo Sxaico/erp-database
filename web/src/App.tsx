@@ -1,32 +1,29 @@
-// web/src/App.tsx
-import React from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { AuthProvider, useAuth } from "./auth/AuthContext";
-import { Protected } from "./components/Protected";
-import Login from "./pages/Login";
-import Projects from "./pages/Projects";
-import ProjectDetail from "./pages/ProjectDetail";
+// src/App.tsx
+import React from 'react';
+import { Route, Routes, Navigate } from 'react-router-dom';
+import Home from './pages/Home';
+import Projects from './pages/Projects';
+import Login from './pages/Login';
+import Navbar from './components/Navbar';
+import { useAuth } from './auth/AuthContext';
 
-function RootRedirect() {
-  const { token } = useAuth();
-  return <Navigate to={token ? "/projects" : "/login"} replace />;
+function PrivateRoute({ children }: { children: JSX.Element }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div style={{padding:16}}>Cargando sesión...</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<RootRedirect />} />
-          <Route path="/login" element={<Login />} />
-          <Route element={<Protected />}>
-            <Route path="/projects" element={<Projects />} />
-            <Route path="/projects/:id" element={<ProjectDetail />} />
-          </Route>
-          {/* fallback */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+    <>
+      <Navbar />
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/projects" element={<PrivateRoute><Projects /></PrivateRoute>} />
+        <Route path="/login" element={<Login />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
   );
 }
