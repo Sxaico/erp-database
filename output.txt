@@ -4583,57 +4583,57 @@ export const api = {
 web\src\App.tsx
 
 import React from "react";
-import { Link, NavLink, Outlet, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
+import ProtectedRoute from "./components/ProtectedRoute";
+import Layout from "./components/Layout";
+
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Projects from "./pages/Projects";
-import ProtectedRoute from "./components/ProtectedRoute";
-import { useAuth } from "./auth/AuthContext";
-
-function Shell() {
-  const { user, logout } = useAuth();
-  return (
-    <div style={{ fontFamily: "system-ui, sans-serif" }}>
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: "1px solid #eee" }}>
-        <Link to="/" style={{ fontWeight: 700, textDecoration: "none", color: "#111827" }}>ERP MVP</Link>
-        <nav style={{ display: "flex", gap: 12 }}>
-          <NavLink to="/" style={({ isActive }) => ({ color: isActive ? "#111827" : "#6b7280", textDecoration: "none" })}>Home</NavLink>
-          <NavLink to="/projects" style={({ isActive }) => ({ color: isActive ? "#111827" : "#6b7280", textDecoration: "none" })}>Proyectos</NavLink>
-        </nav>
-        <div>
-          {user ? (
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={{ fontSize: 14, color: "#374151" }}>{user.nombre} {user.apellido}</span>
-              <button onClick={logout} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ddd", background: "white", cursor: "pointer" }}>
-                Salir
-              </button>
-            </div>
-          ) : (
-            <NavLink to="/login" style={{ textDecoration: "none", color: "#111827" }}>Iniciar sesión</NavLink>
-          )}
-        </div>
-      </header>
-      <Outlet />
-    </div>
-  );
-}
+import ProjectDetail from "./pages/ProjectDetail";
+import Report from "./pages/Report";
 
 export default function App() {
   return (
     <Routes>
-      <Route element={<Shell />}>
-        <Route index element={<Home />} />
-        <Route path="/login" element={<Login />} />
+      <Route path="/login" element={<Login />} />
+
+      <Route element={<ProtectedRoute />}>
         <Route
-          path="/projects"
           element={
-            <ProtectedRoute>
-              <Projects />
-            </ProtectedRoute>
+            <Layout>
+              <Home />
+            </Layout>
           }
+          path="/"
         />
-        <Route path="*" element={<div style={{ padding: 24 }}>404</div>} />
+        <Route
+          element={
+            <Layout>
+              <Projects />
+            </Layout>
+          }
+          path="/projects"
+        />
+        <Route
+          element={
+            <Layout>
+              <ProjectDetail />
+            </Layout>
+          }
+          path="/projects/:id"
+        />
+        <Route
+          element={
+            <Layout>
+              <Report />
+            </Layout>
+          }
+          path="/projects/:id/report"
+        />
       </Route>
+
+      <Route path="*" element={<div style={{ padding: 24 }}>404</div>} />
     </Routes>
   );
 }
@@ -4827,11 +4827,10 @@ export async function updateTask(
 ---
 web\src\auth\AuthContext.tsx
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { apiFetch, apiSetAccessToken } from "../lib/api";
+import React, {createContext, useContext, useEffect, useMemo, useRef, useState} from "react";
 
 type Rol = { id: number; nombre: string; descripcion?: string; activo: boolean; created_at: string };
-type Depto = { id: number; nombre: string; descripcion?: string };
+type Departamento = { id: number; nombre: string; descripcion?: string };
 
 export type User = {
   id: number;
@@ -4845,122 +4844,215 @@ export type User = {
   ultimo_login?: string | null;
   created_at: string;
   roles: Rol[];
-  departamentos: Depto[];
+  departamentos: Departamento[];
 };
 
 type LoginResponse = {
   access_token: string;
   refresh_token: string;
   token_type: "bearer";
-  expires_in: number;
+  expires_in: number; // seconds
   user: User;
 };
 
-type AuthContextValue = {
+type TokenRefreshResponse = {
+  access_token: string;
+  token_type: "bearer";
+  expires_in: number;
+};
+
+type AuthState = {
   user: User | null;
   accessToken: string | null;
   refreshToken: string | null;
-  isAuthenticated: boolean;
-  loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  // epoch (ms) cuando expira el access
+  accessExp: number | null;
 };
 
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+type AuthContextType = {
+  user: User | null;
+  isAuthenticated: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+  getAccessToken: () => Promise<string | null>;
+};
 
-const ACCESS_KEY = "access_token";
-const REFRESH_KEY = "refresh_token";
-const USER_KEY = "auth_user";
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [refreshToken, setRefreshToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+const STORAGE_KEY = "erp_auth_v1";
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
-  // Cargar desde localStorage y validar con /api/auth/me
-  useEffect(() => {
-    const at = localStorage.getItem(ACCESS_KEY);
-    const rt = localStorage.getItem(REFRESH_KEY);
-    const uRaw = localStorage.getItem(USER_KEY);
-    if (at) apiSetAccessToken(at);
-    if (at && uRaw) {
-      setAccessToken(at);
-      setRefreshToken(rt);
-      try {
-        const u = JSON.parse(uRaw) as User;
-        setUser(u);
-      } catch {}
+function loadStorage(): AuthState {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { user: null, accessToken: null, refreshToken: null, accessExp: null };
+    return JSON.parse(raw);
+  } catch {
+    return { user: null, accessToken: null, refreshToken: null, accessExp: null };
+  }
+}
+
+function saveStorage(s: AuthState) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+}
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [state, setState] = useState<AuthState>(() => loadStorage());
+  const timerRef = useRef<number | null>(null);
+
+  const scheduleRefresh = (secondsFromNow: number) => {
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    // refrescar 60s antes del vencimiento (o a los 60s si el token dura muy poco)
+    const ms = Math.max((secondsFromNow - 60) * 1000, 60_000);
+    timerRef.current = window.setTimeout(() => {
+      void refreshAccess();
+    }, ms) as unknown as number;
+  };
+
+  const setAuth = (next: AuthState) => {
+    setState(next);
+    saveStorage(next);
+    if (next.accessExp && next.accessToken) {
+      const now = Date.now();
+      const secondsLeft = Math.max(1, Math.floor((next.accessExp - now) / 1000));
+      scheduleRefresh(secondsLeft);
+    } else if (timerRef.current) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
     }
-    (async () => {
-      try {
-        if (at) {
-          const me = await apiFetch("/api/auth/me");
-          setUser(me as User);
-        } else {
-          setUser(null);
-        }
-      } catch {
-        // si falla, limpiamos
-        doLogout();
-      } finally {
-        setLoading(false);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const doLogout = () => {
-    localStorage.removeItem(ACCESS_KEY);
-    localStorage.removeItem(REFRESH_KEY);
-    localStorage.removeItem(USER_KEY);
-    apiSetAccessToken(null);
-    setUser(null);
-    setAccessToken(null);
-    setRefreshToken(null);
   };
 
   const login = async (email: string, password: string) => {
-    const res = await fetch(import.meta.env.VITE_API_URL + "/api/auth/login", {
+    const resp = await fetch(`${API}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password })
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.detail || "No se pudo iniciar sesión");
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err?.detail || "Error de login");
     }
-    const data = (await res.json()) as LoginResponse;
-    localStorage.setItem(ACCESS_KEY, data.access_token);
-    localStorage.setItem(REFRESH_KEY, data.refresh_token);
-    localStorage.setItem(USER_KEY, JSON.stringify(data.user));
-    apiSetAccessToken(data.access_token);
-    setAccessToken(data.access_token);
-    setRefreshToken(data.refresh_token);
-    setUser(data.user);
+    const data: LoginResponse = await resp.json();
+    const exp = Date.now() + data.expires_in * 1000;
+    setAuth({
+      user: data.user,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      accessExp: exp
+    });
   };
 
-  const value = useMemo<AuthContextValue>(
-    () => ({
-      user,
-      accessToken,
-      refreshToken,
-      isAuthenticated: Boolean(user && accessToken),
-      loading,
-      login,
-      logout: doLogout,
-    }),
-    [user, accessToken, refreshToken, loading]
-  );
+  const refreshAccess = async (): Promise<string | null> => {
+    if (!state.refreshToken) return null;
+    try {
+      const resp = await fetch(`${API}/api/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: state.refreshToken })
+      });
+      if (!resp.ok) throw new Error("No se pudo refrescar sesión");
+      const data: TokenRefreshResponse = await resp.json();
+      const exp = Date.now() + data.expires_in * 1000;
+      const next: AuthState = {
+        ...state,
+        accessToken: data.access_token,
+        accessExp: exp
+      };
+      setAuth(next);
+      return data.access_token;
+    } catch {
+      // refresh inválido: cerrar sesión
+      logout();
+      return null;
+    }
+  };
+
+  const logout = () => {
+    setAuth({ user: null, accessToken: null, refreshToken: null, accessExp: null });
+  };
+
+  const getAccessToken = async () => {
+    // si falta poco, refrescamos
+    if (state.accessExp && state.accessExp - Date.now() < 60_000) {
+      return await refreshAccess();
+    }
+    return state.accessToken;
+  };
+
+  // bootstrap: si tengo token, intento traer /me para confirmar usuario
+  useEffect(() => {
+    const boot = async () => {
+      if (!state.accessToken) return;
+      try {
+        const resp = await fetch(`${API}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${state.accessToken}` }
+        });
+        if (!resp.ok) throw new Error("Token inválido");
+        const user: User = await resp.json();
+        setAuth({ ...state, user });
+      } catch {
+        logout();
+      }
+    };
+    void boot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const value = useMemo<AuthContextType>(() => ({
+    user: state.user,
+    isAuthenticated: !!state.accessToken && !!state.user,
+    login,
+    logout,
+    getAccessToken
+  }), [state.user, state.accessToken, state.accessExp]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
-export const useAuth = (): AuthContextValue => {
+export const useAuth = () => {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth debe usarse dentro de <AuthProvider>");
   return ctx;
 };
+
+
+---
+web\src\components\Layout.tsx
+
+import React from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
+
+export default function Layout({ children }: { children: React.ReactNode }) {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const onLogout = () => {
+    logout();
+    navigate("/login");
+  };
+
+  return (
+    <div style={{ fontFamily: "system-ui, sans-serif", minHeight: "100vh", background: "#f6f7f9" }}>
+      <header style={{ background: "#0f172a", color: "white", padding: "12px 16px", display: "flex", gap: 16, alignItems: "center" }}>
+        <strong>ERP MVP</strong>
+        <nav style={{ display: "flex", gap: 12 }}>
+          <Link to="/" style={{ color: "white" }}>Inicio</Link>
+          <Link to="/projects" style={{ color: "white" }}>Proyectos</Link>
+        </nav>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 12, alignItems: "center" }}>
+          {user && <span style={{ opacity: 0.8 }}>Hola, {user.nombre}</span>}
+          <button onClick={onLogout} style={{ background: "transparent", border: "1px solid #94a3b8", color: "white", padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>
+            Salir
+          </button>
+        </div>
+      </header>
+      <main style={{ maxWidth: 1100, margin: "20px auto", padding: "0 16px" }}>
+        {children}
+      </main>
+    </div>
+  );
+}
 
 
 ---
@@ -5010,21 +5102,16 @@ export const Protected: React.FC = () => {
 web\src\components\ProtectedRoute.tsx
 
 import React from "react";
-import { Navigate, useLocation } from "react-router-dom";
+import { Navigate, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
-const ProtectedRoute: React.FC<React.PropsWithChildren> = ({ children }) => {
-  const { isAuthenticated, loading } = useAuth();
-  const location = useLocation();
-
-  if (loading) return <div style={{ padding: 24 }}>Cargando…</div>;
+export default function ProtectedRoute() {
+  const { isAuthenticated } = useAuth();
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace state={{ from: location }} />;
+    return <Navigate to="/login" replace />;
   }
-  return <>{children}</>;
-};
-
-export default ProtectedRoute;
+  return <Outlet />;
+}
 
 
 ---
@@ -5132,54 +5219,37 @@ export async function apiFetch<T = any>(
 web\src\pages\Home.tsx
 
 import React, { useEffect, useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 
-type Health = {
-  status: string;
-  database: string;
-  version: string;
-  timestamp: string;
-};
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 export default function Home() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { user, getAccessToken } = useAuth();
+  const [health, setHealth] = useState<string>("...");
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => {
+    const run = async () => {
       try {
-        const res = await fetch(import.meta.env.VITE_API_URL + "/health");
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = (await res.json()) as Health;
-        setHealth(data);
+        const res = await fetch(`${API}/health`);
+        if (!res.ok) throw new Error("No se pudo obtener health");
+        const data = await res.json();
+        setHealth(`API: ${data.status} / DB: ${data.database} / v${data.version}`);
       } catch (e: any) {
-        setError(e?.message || "No se pudo obtener el health");
+        setErr(e?.message || "Error al consultar health");
       }
-    })();
+    };
+    void run();
   }, []);
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
-      <h1>✅ ERP MVP UI en vivo</h1>
+    <div>
+      <h2>✅ ERP MVP UI en vivo</h2>
       <p>Si ves esto, React está montado y Vite sirve la app.</p>
-
+      <p><strong>Usuario:</strong> {user?.nombre_completo}</p>
       <h3>Health de API</h3>
-      {health && (
-        <pre
-          style={{
-            background: "#f6f6f6",
-            padding: 12,
-            borderRadius: 8,
-            overflowX: "auto",
-          }}
-        >
-          {JSON.stringify(health, null, 2)}
-        </pre>
-      )}
-      {!health && error && (
-        <div style={{ color: "#b00" }}>
-          ⚠️ No se pudo obtener el health: {error}
-        </div>
-      )}
+      {err ? <p style={{ color: "#b91c1c" }}>⚠️ {err}</p> : <p>{health}</p>}
+      <p style={{ opacity: .7, marginTop: 24 }}>Tip: navegá a “Proyectos” en el header.</p>
     </div>
   );
 }
@@ -5189,15 +5259,12 @@ export default function Home() {
 web\src\pages\Login.tsx
 
 import React, { useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
 export default function Login() {
   const { login } = useAuth();
-  const nav = useNavigate();
-  const location = useLocation() as any;
-  const redirectTo = location.state?.from?.pathname || "/projects";
-
+  const navigate = useNavigate();
   const [email, setEmail] = useState("admin@miempresa.com");
   const [password, setPassword] = useState("admin123");
   const [loading, setLoading] = useState(false);
@@ -5209,152 +5276,138 @@ export default function Login() {
     setLoading(true);
     try {
       await login(email, password);
-      nav(redirectTo, { replace: true });
-    } catch (ex: any) {
-      setErr(ex?.message || "Error de autenticación");
+      navigate("/");
+    } catch (e: any) {
+      setErr(e?.message || "Error");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", fontFamily: "system-ui, sans-serif" }}>
-      <form onSubmit={onSubmit} style={{ width: 320, display: "grid", gap: 12 }}>
-        <h2>Iniciar sesión</h2>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Email</span>
-          <input
-            autoFocus
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
-          />
+    <div style={{ maxWidth: 420, margin: "80px auto", padding: 24, background: "white", borderRadius: 12, boxShadow: "0 6px 24px rgba(0,0,0,.08)" }}>
+      <h2 style={{ marginTop: 0 }}>Iniciar sesión</h2>
+      <form onSubmit={onSubmit} style={{ display: "grid", gap: 12 }}>
+        <label>
+          Email
+          <input value={email} onChange={e=>setEmail(e.target.value)} type="email" placeholder="tu@empresa.com"
+                 style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #cbd5e1" }} />
         </label>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Contraseña</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
-          />
+        <label>
+          Password
+          <input value={password} onChange={e=>setPassword(e.target.value)} type="password" placeholder="••••••••"
+                 style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #cbd5e1" }} />
         </label>
-        {err && <div style={{ color: "#b00" }}>{err}</div>}
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            padding: "10px 14px",
-            borderRadius: 8,
-            background: "#111827",
-            color: "white",
-            border: "none",
-            cursor: "pointer",
-          }}
-        >
-          {loading ? "Entrando…" : "Entrar"}
+        {err && <div style={{ color: "#b91c1c" }}>{err}</div>}
+        <button disabled={loading} type="submit" style={{ padding: "10px 14px", borderRadius: 8, background: "#0f172a", color: "white", border: "none", cursor: "pointer" }}>
+          {loading ? "Ingresando..." : "Ingresar"}
         </button>
-        <div style={{ fontSize: 12, color: "#555" }}>
-          Tip: usa <strong>admin@miempresa.com</strong> / <strong>admin123</strong>
-        </div>
       </form>
     </div>
   );
 }
-
+  
 
 ---
 web\src\pages\ProjectDetail.tsx
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { getJSON, patchJSON } from "../api";
+import { useAuth } from "../auth/AuthContext";
 
-type Proyecto = {
-  id: number; nombre: string; estado: string; codigo?: string | null;
-};
 type Tarea = {
-  id: number; uuid: string; proyecto_id: number; titulo: string; estado: string; prioridad: number; real_horas?: number | null;
+  id: number;
+  uuid: string;
+  proyecto_id: number;
+  titulo: string;
+  estado: string;
+  prioridad: number;
+  real_horas?: number | null;
 };
-type Resumen = { proyecto_id: number; proyecto: string; estado: string; cantidad: number };
 
-const ESTADOS = ["PENDIENTE", "EN_PROGRESO", "HECHA"];
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const pid = Number(id);
+  const { getAccessToken } = useAuth();
+  const [items, setItems] = useState<Tarea[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const [proj, setProj] = useState<Proyecto | null>(null);
-  const [tasks, setTasks] = useState<Tarea[]>([]);
-  const [resumen, setResumen] = useState<Resumen[]>([]);
+  const load = async () => {
+    setErr(null);
+    setLoading(true);
+    try {
+      const at = await getAccessToken();
+      const res = await fetch(`${API}/api/projects/${pid}/tasks`, {
+        headers: { Authorization: `Bearer ${at}` }
+      });
+      if (!res.ok) throw new Error("No se pudieron obtener tareas");
+      setItems(await res.json());
+    } catch (e: any) {
+      setErr(e?.message || "Error");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  async function load() {
-    const p = await getJSON<Proyecto>(`/api/projects/${pid}`);
-    setProj(p);
-    const t = await getJSON<Tarea[]>(`/api/projects/${pid}/tasks`);
-    setTasks(t);
-    const r = await getJSON<Resumen[]>(`/api/projects/${pid}/report/estado`);
-    setResumen(r);
-  }
+  useEffect(() => { void load(); }, []);
 
-  useEffect(() => {
-    load().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pid]);
-
-  async function updateEstado(taskId: number, estado: string) {
-    await patchJSON<Tarea>(`/api/projects/tasks/${taskId}`, { estado });
-    await load();
-  }
+  const updateEstado = async (taskId: number, estado: string) => {
+    try {
+      const at = await getAccessToken();
+      const res = await fetch(`${API}/api/projects/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${at}` },
+        body: JSON.stringify({ estado })
+      });
+      if (!res.ok) throw new Error("No se pudo actualizar tarea");
+      await load();
+    } catch (e: any) {
+      alert(e?.message || "Error al actualizar");
+    }
+  };
 
   return (
-    <div style={{ padding: 16 }}>
-      {!proj ? (
-        <div>Cargando...</div>
-      ) : (
-        <>
-          <h3>{proj.codigo || `#${proj.id}`} — {proj.nombre}</h3>
-
-          <div style={{ display: "flex", gap: 8, margin: "8px 0 16px" }}>
-            {resumen.map(r => (
-              <div key={r.estado} style={{ border: "1px solid #eee", borderRadius: 8, padding: "6px 10px" }}>
-                <strong>{r.estado}</strong>: {r.cantidad}
-              </div>
-            ))}
-            {resumen.length === 0 && <div style={{ color: "#888" }}>Sin datos de resumen.</div>}
-          </div>
-
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
-                <th style={{ padding: 8 }}>ID</th>
-                <th style={{ padding: 8 }}>Título</th>
-                <th style={{ padding: 8 }}>Estado</th>
-                <th style={{ padding: 8 }}>Acción</th>
+    <div>
+      <h2>Proyecto #{pid} · Tareas</h2>
+      {loading && <p>Cargando...</p>}
+      {err && <p style={{ color: "#b91c1c" }}>⚠️ {err}</p>}
+      {!loading && !err && (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", background: "white", borderRadius: 12, overflow: "hidden" }}>
+            <thead style={{ background: "#e2e8f0", textAlign: "left" }}>
+              <tr>
+                <th style={{ padding: 10 }}>#</th>
+                <th style={{ padding: 10 }}>Título</th>
+                <th style={{ padding: 10 }}>Estado</th>
+                <th style={{ padding: 10 }}>Prioridad</th>
+                <th style={{ padding: 10 }}>Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {tasks.map(t => (
-                <tr key={t.id} style={{ borderBottom: "1px solid #f3f3f3" }}>
-                  <td style={{ padding: 8 }}>{t.id}</td>
-                  <td style={{ padding: 8 }}>{t.titulo}</td>
-                  <td style={{ padding: 8 }}>{t.estado}</td>
-                  <td style={{ padding: 8 }}>
-                    <select value={t.estado} onChange={e => updateEstado(t.id, e.target.value)}>
-                      {ESTADOS.map(s => <option key={s} value={s}>{s}</option>)}
+              {items.map(t => (
+                <tr key={t.id} style={{ borderBottom: "1px solid #e2e8f0" }}>
+                  <td style={{ padding: 10 }}>{t.id}</td>
+                  <td style={{ padding: 10 }}>{t.titulo}</td>
+                  <td style={{ padding: 10 }}>{t.estado}</td>
+                  <td style={{ padding: 10 }}>{t.prioridad}</td>
+                  <td style={{ padding: 10 }}>
+                    <select value={t.estado} onChange={(e)=>updateEstado(t.id, e.target.value)}>
+                      <option value="PENDIENTE">PENDIENTE</option>
+                      <option value="EN_PROGRESO">EN_PROGRESO</option>
+                      <option value="HECHA">HECHA</option>
                     </select>
                   </td>
                 </tr>
               ))}
-              {tasks.length === 0 && (
-                <tr><td colSpan={4} style={{ padding: 8, color: "#888" }}>No hay tareas.</td></tr>
+              {items.length === 0 && (
+                <tr><td colSpan={5} style={{ padding: 10, textAlign: "center" }}>Sin tareas.</td></tr>
               )}
             </tbody>
           </table>
-        </>
+        </div>
       )}
     </div>
   );
@@ -5488,7 +5541,8 @@ export default function ProjectDetailPage() {
 web\src\pages\Projects.tsx
 
 import React, { useEffect, useState } from "react";
-import { apiFetch } from "../lib/api";
+import { Link } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 
 type Proyecto = {
   id: number;
@@ -5501,37 +5555,72 @@ type Proyecto = {
   presupuesto_monto?: number | null;
 };
 
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+
 export default function Projects() {
-  const [data, setData] = useState<Proyecto[] | null>(null);
+  const { getAccessToken } = useAuth();
+  const [items, setItems] = useState<Proyecto[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    (async () => {
+    const run = async () => {
+      setLoading(true);
+      setErr(null);
       try {
-        const items = await apiFetch<Proyecto[]>("/api/projects");
-        setData(items);
+        const at = await getAccessToken();
+        const res = await fetch(`${API}/api/projects`, {
+          headers: { Authorization: `Bearer ${at}` }
+        });
+        if (!res.ok) throw new Error("No se pudieron obtener proyectos");
+        const data: Proyecto[] = await res.json();
+        setItems(data);
       } catch (e: any) {
-        setErr(e?.message || "No se pudo cargar proyectos");
+        setErr(e?.message || "Error");
+      } finally {
+        setLoading(false);
       }
-    })();
-  }, []);
+    };
+    void run();
+  }, [getAccessToken]);
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
+    <div>
       <h2>Proyectos</h2>
-      {err && <div style={{ color: "#b00" }}>⚠️ {err}</div>}
-      {!err && !data && <div>Cargando…</div>}
-      {data && data.length === 0 && <div>No hay proyectos</div>}
-      {data && data.length > 0 && (
-        <div style={{ display: "grid", gap: 8 }}>
-          {data.map((p) => (
-            <div key={p.id} style={{ padding: 12, border: "1px solid #eee", borderRadius: 8 }}>
-              <div style={{ fontWeight: 600 }}>{p.codigo || "(sin código)"} — {p.nombre}</div>
-              <div style={{ fontSize: 13, color: "#555" }}>
-                Estado: {p.estado} · Prioridad: {p.prioridad} · Avance: {p.avance_pct ?? 0}%
-              </div>
-            </div>
-          ))}
+      {loading && <p>Cargando...</p>}
+      {err && <p style={{ color: "#b91c1c" }}>⚠️ {err}</p>}
+      {!loading && !err && (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", background: "white", borderRadius: 12, overflow: "hidden" }}>
+            <thead style={{ background: "#e2e8f0", textAlign: "left" }}>
+              <tr>
+                <th style={{ padding: 10 }}>#</th>
+                <th style={{ padding: 10 }}>Código</th>
+                <th style={{ padding: 10 }}>Nombre</th>
+                <th style={{ padding: 10 }}>Estado</th>
+                <th style={{ padding: 10 }}>Prioridad</th>
+                <th style={{ padding: 10 }}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map(p => (
+                <tr key={p.id} style={{ borderBottom: "1px solid #e2e8f0" }}>
+                  <td style={{ padding: 10 }}>{p.id}</td>
+                  <td style={{ padding: 10 }}>{p.codigo || "-"}</td>
+                  <td style={{ padding: 10 }}>{p.nombre}</td>
+                  <td style={{ padding: 10 }}>{p.estado}</td>
+                  <td style={{ padding: 10 }}>{p.prioridad}</td>
+                  <td style={{ padding: 10 }}>
+                    <Link to={`/projects/${p.id}`}>Ver tareas</Link>{" · "}
+                    <Link to={`/projects/${p.id}/report`}>Reporte</Link>
+                  </td>
+                </tr>
+              ))}
+              {items.length === 0 && (
+                <tr><td colSpan={6} style={{ padding: 10, textAlign: "center" }}>Sin proyectos visibles.</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -5590,6 +5679,67 @@ export default function ProjectsPage() {
             </li>
           ))}
         </ul>
+      )}
+    </div>
+  );
+}
+
+
+---
+web\src\pages\Report.tsx
+
+import React, { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
+
+type Resumen = {
+  proyecto_id: number;
+  proyecto: string;
+  estado: string;
+  cantidad: number;
+};
+
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+
+export default function Report() {
+  const { id } = useParams<{ id: string }>();
+  const pid = Number(id);
+  const { getAccessToken } = useAuth();
+  const [items, setItems] = useState<Resumen[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const run = async () => {
+      setErr(null);
+      try {
+        const at = await getAccessToken();
+        const res = await fetch(`${API}/api/projects/${pid}/report/estado`, {
+          headers: { Authorization: `Bearer ${at}` }
+        });
+        if (!res.ok) throw new Error("No se pudo obtener el reporte");
+        setItems(await res.json());
+      } catch (e: any) {
+        setErr(e?.message || "Error");
+      }
+    };
+    void run();
+  }, [pid, getAccessToken]);
+
+  const total = items.reduce((acc, it) => acc + it.cantidad, 0);
+
+  return (
+    <div>
+      <h2>Reporte por estado · Proyecto #{pid}</h2>
+      {err && <p style={{ color: "#b91c1c" }}>⚠️ {err}</p>}
+      {!err && (
+        <>
+          <ul>
+            {items.map(x => (
+              <li key={x.estado}>{x.estado}: <strong>{x.cantidad}</strong></li>
+            ))}
+          </ul>
+          <p><strong>Total de tareas:</strong> {total}</p>
+        </>
       )}
     </div>
   );

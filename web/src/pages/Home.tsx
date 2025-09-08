@@ -1,52 +1,35 @@
 import React, { useEffect, useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 
-type Health = {
-  status: string;
-  database: string;
-  version: string;
-  timestamp: string;
-};
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 export default function Home() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { user, getAccessToken } = useAuth();
+  const [health, setHealth] = useState<string>("...");
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => {
+    const run = async () => {
       try {
-        const res = await fetch(import.meta.env.VITE_API_URL + "/health");
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = (await res.json()) as Health;
-        setHealth(data);
+        const res = await fetch(`${API}/health`);
+        if (!res.ok) throw new Error("No se pudo obtener health");
+        const data = await res.json();
+        setHealth(`API: ${data.status} / DB: ${data.database} / v${data.version}`);
       } catch (e: any) {
-        setError(e?.message || "No se pudo obtener el health");
+        setErr(e?.message || "Error al consultar health");
       }
-    })();
+    };
+    void run();
   }, []);
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
-      <h1>✅ ERP MVP UI en vivo</h1>
+    <div>
+      <h2>✅ ERP MVP UI en vivo</h2>
       <p>Si ves esto, React está montado y Vite sirve la app.</p>
-
+      <p><strong>Usuario:</strong> {user?.nombre_completo}</p>
       <h3>Health de API</h3>
-      {health && (
-        <pre
-          style={{
-            background: "#f6f6f6",
-            padding: 12,
-            borderRadius: 8,
-            overflowX: "auto",
-          }}
-        >
-          {JSON.stringify(health, null, 2)}
-        </pre>
-      )}
-      {!health && error && (
-        <div style={{ color: "#b00" }}>
-          ⚠️ No se pudo obtener el health: {error}
-        </div>
-      )}
+      {err ? <p style={{ color: "#b91c1c" }}>⚠️ {err}</p> : <p>{health}</p>}
+      <p style={{ opacity: .7, marginTop: 24 }}>Tip: navegá a “Proyectos” en el header.</p>
     </div>
   );
 }

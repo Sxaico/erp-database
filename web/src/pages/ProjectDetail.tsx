@@ -1,89 +1,100 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { getJSON, patchJSON } from "../api";
+import { useAuth } from "../auth/AuthContext";
 
-type Proyecto = {
-  id: number; nombre: string; estado: string; codigo?: string | null;
-};
 type Tarea = {
-  id: number; uuid: string; proyecto_id: number; titulo: string; estado: string; prioridad: number; real_horas?: number | null;
+  id: number;
+  uuid: string;
+  proyecto_id: number;
+  titulo: string;
+  estado: string;
+  prioridad: number;
+  real_horas?: number | null;
 };
-type Resumen = { proyecto_id: number; proyecto: string; estado: string; cantidad: number };
 
-const ESTADOS = ["PENDIENTE", "EN_PROGRESO", "HECHA"];
+const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const pid = Number(id);
+  const { getAccessToken } = useAuth();
+  const [items, setItems] = useState<Tarea[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const [proj, setProj] = useState<Proyecto | null>(null);
-  const [tasks, setTasks] = useState<Tarea[]>([]);
-  const [resumen, setResumen] = useState<Resumen[]>([]);
+  const load = async () => {
+    setErr(null);
+    setLoading(true);
+    try {
+      const at = await getAccessToken();
+      const res = await fetch(`${API}/api/projects/${pid}/tasks`, {
+        headers: { Authorization: `Bearer ${at}` }
+      });
+      if (!res.ok) throw new Error("No se pudieron obtener tareas");
+      setItems(await res.json());
+    } catch (e: any) {
+      setErr(e?.message || "Error");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  async function load() {
-    const p = await getJSON<Proyecto>(`/api/projects/${pid}`);
-    setProj(p);
-    const t = await getJSON<Tarea[]>(`/api/projects/${pid}/tasks`);
-    setTasks(t);
-    const r = await getJSON<Resumen[]>(`/api/projects/${pid}/report/estado`);
-    setResumen(r);
-  }
+  useEffect(() => { void load(); }, []);
 
-  useEffect(() => {
-    load().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pid]);
-
-  async function updateEstado(taskId: number, estado: string) {
-    await patchJSON<Tarea>(`/api/projects/tasks/${taskId}`, { estado });
-    await load();
-  }
+  const updateEstado = async (taskId: number, estado: string) => {
+    try {
+      const at = await getAccessToken();
+      const res = await fetch(`${API}/api/projects/tasks/${taskId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${at}` },
+        body: JSON.stringify({ estado })
+      });
+      if (!res.ok) throw new Error("No se pudo actualizar tarea");
+      await load();
+    } catch (e: any) {
+      alert(e?.message || "Error al actualizar");
+    }
+  };
 
   return (
-    <div style={{ padding: 16 }}>
-      {!proj ? (
-        <div>Cargando...</div>
-      ) : (
-        <>
-          <h3>{proj.codigo || `#${proj.id}`} — {proj.nombre}</h3>
-
-          <div style={{ display: "flex", gap: 8, margin: "8px 0 16px" }}>
-            {resumen.map(r => (
-              <div key={r.estado} style={{ border: "1px solid #eee", borderRadius: 8, padding: "6px 10px" }}>
-                <strong>{r.estado}</strong>: {r.cantidad}
-              </div>
-            ))}
-            {resumen.length === 0 && <div style={{ color: "#888" }}>Sin datos de resumen.</div>}
-          </div>
-
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
-                <th style={{ padding: 8 }}>ID</th>
-                <th style={{ padding: 8 }}>Título</th>
-                <th style={{ padding: 8 }}>Estado</th>
-                <th style={{ padding: 8 }}>Acción</th>
+    <div>
+      <h2>Proyecto #{pid} · Tareas</h2>
+      {loading && <p>Cargando...</p>}
+      {err && <p style={{ color: "#b91c1c" }}>⚠️ {err}</p>}
+      {!loading && !err && (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", background: "white", borderRadius: 12, overflow: "hidden" }}>
+            <thead style={{ background: "#e2e8f0", textAlign: "left" }}>
+              <tr>
+                <th style={{ padding: 10 }}>#</th>
+                <th style={{ padding: 10 }}>Título</th>
+                <th style={{ padding: 10 }}>Estado</th>
+                <th style={{ padding: 10 }}>Prioridad</th>
+                <th style={{ padding: 10 }}>Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {tasks.map(t => (
-                <tr key={t.id} style={{ borderBottom: "1px solid #f3f3f3" }}>
-                  <td style={{ padding: 8 }}>{t.id}</td>
-                  <td style={{ padding: 8 }}>{t.titulo}</td>
-                  <td style={{ padding: 8 }}>{t.estado}</td>
-                  <td style={{ padding: 8 }}>
-                    <select value={t.estado} onChange={e => updateEstado(t.id, e.target.value)}>
-                      {ESTADOS.map(s => <option key={s} value={s}>{s}</option>)}
+              {items.map(t => (
+                <tr key={t.id} style={{ borderBottom: "1px solid #e2e8f0" }}>
+                  <td style={{ padding: 10 }}>{t.id}</td>
+                  <td style={{ padding: 10 }}>{t.titulo}</td>
+                  <td style={{ padding: 10 }}>{t.estado}</td>
+                  <td style={{ padding: 10 }}>{t.prioridad}</td>
+                  <td style={{ padding: 10 }}>
+                    <select value={t.estado} onChange={(e)=>updateEstado(t.id, e.target.value)}>
+                      <option value="PENDIENTE">PENDIENTE</option>
+                      <option value="EN_PROGRESO">EN_PROGRESO</option>
+                      <option value="HECHA">HECHA</option>
                     </select>
                   </td>
                 </tr>
               ))}
-              {tasks.length === 0 && (
-                <tr><td colSpan={4} style={{ padding: 8, color: "#888" }}>No hay tareas.</td></tr>
+              {items.length === 0 && (
+                <tr><td colSpan={5} style={{ padding: 10, textAlign: "center" }}>Sin tareas.</td></tr>
               )}
             </tbody>
           </table>
-        </>
+        </div>
       )}
     </div>
   );
