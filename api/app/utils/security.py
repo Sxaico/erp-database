@@ -56,30 +56,10 @@ def get_user_id_from_token(token: str) -> int:
     except Exception as e:
         raise JWTError(f"Token inválido: {e}") from e
 
+# api/app/utils/security.py (sección final “refresh”)
+from jose import JWTError
 
 def get_user_id_from_refresh_token(token: str) -> int:
-    """
-    Decodifica y valida que sea un refresh token.
-    """
-    try:
-        payload = _jwt_decode(token)
-        if payload.get("type") != "refresh":
-            raise JWTError("El token no es de tipo 'refresh'")
-        sub = payload.get("sub")
-        if not sub:
-            raise JWTError("Refresh token sin 'sub'")
-        return int(sub)
-    except Exception as e:
-        raise JWTError(f"Refresh token inválido: {e}") from e
-
-# ... resto del archivo ...
-
-from jose import JWTError  # <— ya está importado arriba; si no, agrégalo
-
-def get_user_id_from_refresh_token(token: str) -> int:
-    """
-    Valida un refresh token y devuelve el user_id.
-    """
     try:
         payload = _jwt_decode(token)
         if payload.get("type") != "refresh":

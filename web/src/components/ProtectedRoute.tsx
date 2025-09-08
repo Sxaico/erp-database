@@ -1,26 +1,16 @@
-import { ReactNode, useEffect, useState } from "react";
-import { Navigate } from "react-router-dom";
-import { isAuthenticated, getAccessToken } from "../authHelpers";
-import { apiFetch } from "../api";
+import React from "react";
+import { Navigate, useLocation } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 
-export default function ProtectedRoute({ children }: { children: ReactNode }) {
-  const [ok, setOk] = useState<boolean | null>(null);
+const ProtectedRoute: React.FC<React.PropsWithChildren> = ({ children }) => {
+  const { isAuthenticated, loading } = useAuth();
+  const location = useLocation();
 
-  useEffect(() => {
-    // Intento suave: si no hay access token, pero hay refresh, el primer fetch gatilla refresh.
-    async function ping() {
-      try {
-        const r = await apiFetch("/health");
-        setOk(r.ok);
-      } catch {
-        setOk(false);
-      }
-    }
-    if (!getAccessToken() && isAuthenticated()) ping();
-    else setOk(isAuthenticated());
-  }, []);
-
-  if (ok === null) return null; // loader simple; para MVP no pintamos spinner
-  if (!ok) return <Navigate to="/login" replace />;
+  if (loading) return <div style={{ padding: 24 }}>Cargando…</div>;
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
   return <>{children}</>;
-}
+};
+
+export default ProtectedRoute;

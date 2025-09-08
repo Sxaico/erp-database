@@ -1,6 +1,435 @@
+.gitignore
+
+# dependencias / caches
+__pycache__/
+*.pyc
+node_modules/
+*.log
+
+# entornos / secretos locales
+api/.env
+.env
+
+# datos locales de postgres
+pgdata/
+
+# artefactos de editor/OS
+.DS_Store
+.vscode/
+.idea/
+
+
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\.env
+docker-compose.yml
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: erp_postgres
+    environment:
+      POSTGRES_DB: erp_db
+      POSTGRES_USER: erp_user
+      POSTGRES_PASSWORD: erp_password123
+      TZ: America/Argentina/Buenos_Aires
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp_user -d erp_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: erp_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@miempresa.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      TZ: America/Argentina/Buenos_Aires
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: erp_api
+    env_file:
+      - ./api/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./api:/app
+  web:
+    image: node:20-alpine
+    container_name: erp_web
+    working_dir: /app
+    # CAMBIA a npm install
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./web:/app
+    depends_on:
+      - api
+
+
+
 ---
+README.md
+
+# ERP MVP (API + DB + UI)
+
+MVP funcional para gestión básica de proyectos y tareas, con autenticación por roles.  
+Stack: **FastAPI + PostgreSQL + pgAdmin + Vite/React** en Docker Compose.
+
+---
+
+## 🚀 Quick Start
+
+```bash
+# 1) Clonar el repo
+git clone <TU_REPO.git> erp-database
+cd erp-database
+
+# 2) Levantar todo
+docker compose up -d --build
+
+# 3) Verificar
+# API health:
+http://localhost:8000/health
+# UI mínima:
+http://localhost:5173/
+# pgAdmin:
+http://localhost:8080/
+````
+
+> Si cambiaste puertos, ajústalos en `docker-compose.yml`.
+
+---
+
+## 🧱 Servicios & URLs
+
+| Servicio  | URL                            | Notas                      |
+| --------- | ------------------------------ | -------------------------- |
+| API       | `http://localhost:8000`        | Docs en `/docs` y `/redoc` |
+| Health    | `http://localhost:8000/health` | Estado DB y versión        |
+| UI (Vite) | `http://localhost:5173`        | UI mínima “B” + Health API |
+| pgAdmin   | `http://localhost:8080`        | Ver DB y diagramas         |
+
+**pgAdmin (primera vez)**
+
+* Usuario: `admin@miempresa.com`
+* Password: `admin123`
+* Agregar servidor:
+
+  * Name: `ERP Postgres`
+  * Host: `postgres`
+  * Port: `5432`
+  * DB: `erp_db`
+  * User: `erp_user`
+  * Pass: `erp_password123`
+
+---
+
+## 🔑 Cuentas de prueba (seeds)
+
+| Email                  | Password   | Rol         |
+| ---------------------- | ---------- | ----------- |
+| `admin@miempresa.com`  | `admin123` | Super Admin |
+| `colab1@miempresa.com` | `user123`  | Colaborador |
+| `colab2@miempresa.com` | `user123`  | Colaborador |
+| `colab3@miempresa.com` | `user123`  | Colaborador |
+
+> Los seeds se cargan con los scripts en `init-scripts/`.
+> Si el volumen `./pgdata/` ya existía, los scripts no se re-ejecutan automáticamente (ver “Reset DB” abajo).
+
+---
+
+## 📦 Estructura del proyecto (resumen)
+
+```
+.
+├─ api/
+│  ├─ .env
+│  ├─ Dockerfile
+│  ├─ requirements.txt
+│  └─ app/
+│     ├─ main.py
+│     ├─ config.py
+│     ├─ database.py
+│     ├─ utils/
+│     │  ├─ security.py
+│     │  └─ dependencies.py
+│     ├─ auth/
+│     │  ├─ models.py
+│     │  ├─ routes.py
+│     │  └─ schemas.py
+│     └─ projects/
+│        ├─ models.py
+│        ├─ routes.py
+│        └─ schemas.py
+├─ init-scripts/
+│  ├─ 01-schema.sql
+│  ├─ 02-datos-iniciales.sql
+│  ├─ 03-schema-projects.sql
+│  ├─ 04-data-demo.sql
+│  ├─ 05-initial-data.sql
+│  ├─ 06-fix-admin.sql
+│  └─ 07-sample-collaborators.sql
+├─ docker-compose.yml
+└─ web/  (UI mínima React + Vite)
+   ├─ package.json
+   ├─ index.html
+   ├─ vite.config.ts
+   └─ src/
+      ├─ main.tsx
+      └─ App.tsx
+```
+
+---
+
+## 🔐 Endpoints principales
+
+**Auth**
+
+* `POST /api/auth/login` → `{ access_token, refresh_token, expires_in, user }`
+* `GET /api/auth/me` (Bearer) → datos del usuario logueado
+* `GET /api/auth/users` (Solo Admin/Super Admin) → lista de usuarios
+
+> Nota: El **refresh** está planificado. El `refresh_token` viene en la respuesta de login y se activará cuando agreguemos `POST /api/auth/refresh`.
+
+**Projects & Tasks**
+
+* `POST /api/projects` (Bearer) → crear proyecto
+* `GET /api/projects` (Bearer) → listar proyectos
+* `PATCH /api/projects/{id}` (Bearer) → actualizar proyecto
+* `POST /api/projects/tasks` (Bearer) → crear tarea
+* `PATCH /api/projects/tasks/{task_id}` (Bearer) → actualizar tarea
+* `GET /api/projects/{id}/report/estado` (Bearer) → resumen por estado (vista)
+
+---
+
+## 🧪 Pruebas rápidas (PowerShell)
+
+```powershell
+# Login admin
+$resp = Invoke-RestMethod -Method POST -Uri "http://localhost:8000/api/auth/login" `
+  -ContentType "application/json" `
+  -Body '{"email":"admin@miempresa.com","password":"admin123"}'
+$AT = $resp.access_token
+
+# Me
+Invoke-RestMethod -Method GET -Uri "http://localhost:8000/api/auth/me" `
+  -Headers @{ Authorization = "Bearer $AT" } | ConvertTo-Json -Depth 6
+
+# Crear proyecto
+$createProjBody = @{ codigo="MVP-0001"; nombre="MVP Demo"; descripcion="Proyecto MVP e2e"; prioridad=2 } | ConvertTo-Json
+$proj = Invoke-RestMethod -Method POST -Uri "http://localhost:8000/api/projects" `
+  -Headers @{ Authorization = "Bearer $AT" } -ContentType "application/json" -Body $createProjBody
+$PROJ_ID = $proj.id
+
+# Crear tareas
+$body1 = @{ proyecto_id=$PROJ_ID; titulo="Tarea 1"; descripcion="..."; prioridad=2 } | ConvertTo-Json
+$body2 = @{ proyecto_id=$PROJ_ID; titulo="Tarea 2"; descripcion="..."; prioridad=2 } | ConvertTo-Json
+$t1 = Invoke-RestMethod -Method POST -Uri "http://localhost:8000/api/projects/tasks" `
+  -Headers @{ Authorization = "Bearer $AT" } -ContentType "application/json" -Body $body1
+$t2 = Invoke-RestMethod -Method POST -Uri "http://localhost:8000/api/projects/tasks" `
+  -Headers @{ Authorization = "Bearer $AT" } -ContentType "application/json" -Body $body2
+
+# Cambiar estado
+Invoke-RestMethod -Method PATCH -Uri "http://localhost:8000/api/projects/tasks/$($t1.id)" `
+  -Headers @{ Authorization = "Bearer $AT" } -ContentType "application/json" `
+  -Body (@{ estado="HECHA" } | ConvertTo-Json)
+
+# Reporte por estado
+Invoke-RestMethod -Method GET -Uri "http://localhost:8000/api/projects/$PROJ_ID/report/estado" `
+  -Headers @{ Authorization = "Bearer $AT" } | ConvertTo-Json -Depth 6
+```
+
+---
+
+## 🖥️ UI mínima
+
+* `web/` sirve con Vite en `http://localhost:5173/`.
+* Muestra un “landing” con verificación del **/health** de la API.
+* CORS ya incluye `http://localhost:5173` en `api/.env`.
+
+---
+
+## 🐘 SQLAlchemy 2.x (nota)
+
+Se usan `loader options` con **atributos de clase** (no strings), p.ej.:
+
+```python
+select(Usuario).options(selectinload(Usuario.roles))
+```
+
+---
+
+## 🧰 Troubleshooting
+
+* **Puertos ocupados**: cierra procesos locales en `5432`, `8000`, `8080`, `5173` o cambia puertos en `docker-compose.yml`.
+* **Scripts de seed no corren**: si el volumen `./pgdata/` ya existe, Postgres no re-ejecuta `init-scripts/`.
+
+  * **Reset DB** (⚠️ borra datos locales):
+
+    ```bash
+    docker compose down
+    rm -rf ./pgdata
+    docker compose up -d --build
+    ```
+  * **Aplicar script manualmente**:
+
+    ```bash
+    docker compose exec postgres psql -U erp_user -d erp_db -f /docker-entrypoint-initdb.d/07-sample-collaborators.sql
+    ```
+* **Rebuild API**:
+
+  ```bash
+  docker compose up -d --build api
+  ```
+* **Ver logs**:
+
+  ```bash
+  docker compose logs -f api
+  docker compose logs -f web
+  docker compose logs -f postgres
+  ```
+
+---
+
+## 🗺️ Roadmap inmediato (MVP+)
+
+1. **/auth/refresh** (JWT refresh endpoint).
+2. **Guardas en UI por rol** (componente ProtectedRoute + ocultar acciones).
+3. **Login UI simple** (form + persist token).
+4. **Listado de proyectos y tareas** (UI mínima) + cambio de estado.
+5. **Reporte básico en UI** (resumen por estado del proyecto).
+
+> Todo esto mantiene el alcance MVP con impacto directo en usabilidad.
+
+---
+
+## 📄 Licencia
+
+MIT (o la que prefieras).
+
+
+---
+script-copiar-todo.txt
+
+# --- Configuración ---
+# Nombre del archivo de salida que se creará en el directorio raíz.
+$outputFile = "output.txt"
+
+# Lista de directorios que se ignorarán por completo.
+$excludedDirs = @(
+    'pgdata',
+    'node_modules',
+    '__pycache__',
+    '.vite',
+    '.git',      # Se añade .git por si es un repositorio.
+    'dist',      # Se añade dist por si hay builds.
+    'build'
+)
+
+# Lista de extensiones de archivo que se ignorarán.
+$excludedExtensions = @(
+    '.log',
+    '.lock',
+    '.svg',
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.ico'
+)
+
+
+# --- Comienzo del Script ---
+
+# Limpiar el archivo de salida si ya existe.
+if (Test-Path $outputFile) {
+    Clear-Content $outputFile
+}
+
+Write-Host "Generando listado de archivos en '$outputFile'..."
+
+# Obtener la ruta completa del directorio actual para crear rutas relativas.
+$rootPath = (Get-Location).Path
+if (-not $rootPath.EndsWith('\')) {
+    $rootPath += '\'
+}
+$rootPathLength = $rootPath.Length
+
+# Obtener todos los archivos de forma recursiva.
+Get-ChildItem -Path . -Recurse -File | ForEach-Object {
+    $file = $_
+    $shouldExclude = $false
+
+    # 1. Comprobar si el archivo está en un directorio excluido.
+    foreach ($dir in $excludedDirs) {
+        if ($file.FullName -like "*\$dir\*") {
+            $shouldExclude = $true
+            break
+        }
+    }
+
+    # 2. Comprobar si la extensión del archivo está excluida (si no fue ya excluido por directorio).
+    if (-not $shouldExclude) {
+        if ($excludedExtensions -contains $file.Extension) {
+            $shouldExclude = $true
+        }
+    }
+
+    # 3. Excluir el propio archivo de salida.
+    if ($file.Name -eq $outputFile) {
+        $shouldExclude = $true
+    }
+
+    # Si el archivo no debe ser excluido, procesarlo.
+    if (-not $shouldExclude) {
+        # Obtener la ruta relativa del archivo.
+        $relativePath = $file.FullName.Substring($rootPathLength)
+
+        Write-Host "Procesando: $relativePath"
+
+        # Leer el contenido del archivo. Se añade un try-catch por si es un archivo binario.
+        $content = ""
+        try {
+            $content = Get-Content -Path $file.FullName -Raw -ErrorAction Stop
+        } catch {
+            $content = "### ERROR: No se pudo leer el contenido del archivo (posiblemente binario). ###"
+        }
+
+        # Crear el bloque de texto con el formato solicitado.
+        $outputBlock = @"
+$relativePath
+
+$content
+
+---
+"@
+
+        # Añadir el bloque al archivo de salida.
+        Add-Content -Path $outputFile -Value $outputBlock
+    }
+}
+
+Write-Host "¡Proceso completado! El archivo '$outputFile' ha sido creado con éxito."
+
+---
+api\.env
+
 # api/.env
 APP_NAME="ERP API"
 VERSION="1.0.0"
@@ -17,15 +446,15 @@ SECRET_KEY="cambia-esto-en-produccion"
 ALGORITHM="HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
-ALLOWED_ORIGINS="http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://127.0.0.1:8080"
+ALLOWED_ORIGINS="http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://127.0.0.1:8080,http://localhost:5173,http://127.0.0.1:5173"
 
 MAX_UPLOAD_SIZE=10485760
 ITEMS_PER_PAGE=50
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\Dockerfile
----
+api\Dockerfile
+
 # api/Dockerfile
 FROM python:3.11-slim
 
@@ -45,8 +474,8 @@ CMD ["uvicorn", "app.main:app", "--host","0.0.0.0","--port","8000","--reload"]
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\requirements.txt
----
+api\requirements.txt
+
 # FastAPI y servidor
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
@@ -75,284 +504,13 @@ pytest-asyncio==0.21.1
 httpx==0.25.2
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\01-schema.sql
----
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+api\app\__init__.py
 
--- ===== Usuarios / Roles =====
-CREATE TABLE IF NOT EXISTS usuarios (
-  id             SERIAL PRIMARY KEY,
-  uuid           UUID NOT NULL DEFAULT gen_random_uuid(),
-  email          TEXT NOT NULL UNIQUE,
-  password_hash  TEXT NOT NULL,
-  nombre         TEXT NOT NULL,
-  apellido       TEXT NOT NULL,
-  telefono       TEXT,
-  activo         BOOLEAN NOT NULL DEFAULT TRUE,
-  ultimo_login   TIMESTAMPTZ,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  deleted_at     TIMESTAMPTZ
-);
-
-CREATE TABLE IF NOT EXISTS roles (
-  id          SERIAL PRIMARY KEY,
-  nombre      TEXT NOT NULL UNIQUE,
-  descripcion TEXT,
-  activo      BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  deleted_at  TIMESTAMPTZ
-);
-
-CREATE TABLE IF NOT EXISTS usuario_roles (
-  id           SERIAL PRIMARY KEY,
-  usuario_id   INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
-  rol_id       INT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-  asignado_por INT REFERENCES usuarios(id),
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- garantizar que no se dupliquen asignaciones usuario-rol
-CREATE UNIQUE INDEX IF NOT EXISTS uq_usuario_roles_usuario_rol
-  ON usuario_roles(usuario_id, rol_id);
-
--- Índices útiles
-CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email);
-CREATE INDEX IF NOT EXISTS idx_usuarios_activo ON usuarios(activo) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_usuario_roles_usuario ON usuario_roles(usuario_id);
-CREATE INDEX IF NOT EXISTS idx_usuario_roles_rol ON usuario_roles(rol_id);
-
--- ===== Organización / Departamentos =====
-CREATE TABLE IF NOT EXISTS organizaciones (
-  id            SERIAL PRIMARY KEY,
-  uuid          UUID NOT NULL DEFAULT gen_random_uuid(),
-  nombre        TEXT NOT NULL,
-  razon_social  TEXT,
-  rfc           TEXT,
-  telefono      TEXT,
-  email         TEXT,
-  direccion     TEXT,
-  ciudad        TEXT,
-  estado        TEXT,
-  codigo_postal TEXT,
-  pais          TEXT NOT NULL DEFAULT 'Argentina',
-  activa        BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  deleted_at    TIMESTAMPTZ
-);
-
-CREATE TABLE IF NOT EXISTS departamentos (
-  id                     SERIAL PRIMARY KEY,
-  uuid                   UUID NOT NULL DEFAULT gen_random_uuid(),
-  nombre                 TEXT NOT NULL,
-  descripcion            TEXT,
-  organizacion_id        INT REFERENCES organizaciones(id) ON DELETE CASCADE,
-  departamento_padre_id  INT REFERENCES departamentos(id),
-  responsable_id         INT REFERENCES usuarios(id),
-  activo                 BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
-  deleted_at             TIMESTAMPTZ
-);
-
-CREATE TABLE IF NOT EXISTS usuario_departamentos (
-  id               SERIAL PRIMARY KEY,
-  usuario_id       INT REFERENCES usuarios(id) ON DELETE CASCADE,
-  departamento_id  INT REFERENCES departamentos(id) ON DELETE CASCADE,
-  es_responsable   BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Índices parciales para soft delete
-CREATE INDEX IF NOT EXISTS idx_orgs_activas ON organizaciones(id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_deptos_activos ON departamentos(id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_usuario_deptos_usuario ON usuario_departamentos(usuario_id);
-CREATE INDEX IF NOT EXISTS idx_usuario_deptos_depto ON usuario_departamentos(departamento_id);
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\02-datos-iniciales.sql
----
--- Este archivo se deja mínimo para evitar duplicar DDL del 01.
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+api\app\config.py
 
-
----
-Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\03-schema-projects.sql
----
--- init-scripts/03-schema-projects.sql
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
-CREATE TABLE IF NOT EXISTS proyectos (
-  id                 SERIAL PRIMARY KEY,
-  uuid               UUID NOT NULL DEFAULT gen_random_uuid(),
-  codigo             TEXT UNIQUE,
-  nombre             TEXT NOT NULL,
-  descripcion        TEXT,
-  organizacion_id    INT REFERENCES organizaciones(id) ON DELETE SET NULL,
-  gerente_proyecto_id INT REFERENCES usuarios(id) ON DELETE SET NULL,
-  sponsor_id         INT REFERENCES usuarios(id) ON DELETE SET NULL,
-  prioridad          SMALLINT NOT NULL DEFAULT 3,
-  estado             TEXT NOT NULL DEFAULT 'EN_PROGRESO',
-  presupuesto_monto  NUMERIC(14,2) DEFAULT 0,
-  avance_pct         NUMERIC(5,2)  DEFAULT 0,
-  fecha_inicio       DATE,
-  fecha_fin_plan     DATE,
-  fecha_fin_real     DATE,
-  activo             BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-  deleted_at         TIMESTAMPTZ
-);
-
-CREATE INDEX IF NOT EXISTS idx_proy_codigo ON proyectos(codigo) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_proy_estado ON proyectos(estado) WHERE deleted_at IS NULL;
-
-CREATE TABLE IF NOT EXISTS tareas (
-  id              SERIAL PRIMARY KEY,
-  uuid            UUID NOT NULL DEFAULT gen_random_uuid(),
-  proyecto_id     INT NOT NULL REFERENCES proyectos(id) ON DELETE CASCADE,
-  titulo          TEXT NOT NULL,
-  descripcion     TEXT,
-  estado          TEXT NOT NULL DEFAULT 'PENDIENTE',
-  prioridad       SMALLINT NOT NULL DEFAULT 3,
-  asignado_a      INT REFERENCES usuarios(id) ON DELETE SET NULL,
-  estimado_horas  NUMERIC(10,2) DEFAULT 0,
-  real_horas      NUMERIC(10,2) DEFAULT 0,
-  fecha_inicio    DATE,
-  fecha_fin_plan  DATE,
-  fecha_fin_real  DATE,
-  activo          BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  deleted_at      TIMESTAMPTZ
-);
-
-CREATE INDEX IF NOT EXISTS idx_tareas_proyecto ON tareas(proyecto_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_tareas_estado ON tareas(estado) WHERE deleted_at IS NULL;
-
-CREATE OR REPLACE VIEW vw_resumen_tareas_por_estado AS
-SELECT
-  p.id AS proyecto_id,
-  p.nombre AS proyecto,
-  t.estado,
-  COUNT(*)::int AS cantidad
-FROM proyectos p
-JOIN tareas t ON t.proyecto_id = p.id AND t.deleted_at IS NULL
-WHERE p.deleted_at IS NULL
-GROUP BY p.id, p.nombre, t.estado
-ORDER BY p.id, t.estado;
-
-
----
-Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\04-data-demo.sql
----
--- init-scripts/04-data-demo.sql
-WITH upsert AS (
-  INSERT INTO proyectos (codigo, nombre, estado, prioridad, presupuesto_monto)
-  VALUES ('DEMO-2024-001','Implementación de Sistema ERP','EN_PROGRESO',2,500000)
-  ON CONFLICT (codigo) DO NOTHING
-  RETURNING id
-)
-INSERT INTO tareas (proyecto_id, titulo, estado, prioridad, estimado_horas)
-SELECT COALESCE((SELECT id FROM upsert), (SELECT id FROM proyectos WHERE codigo='DEMO-2024-001' LIMIT 1)),
-       t.titulo, t.estado, t.prioridad, t.est
-FROM (VALUES
-  ('Análisis de Requerimientos','HECHA',2,16),
-  ('Diseño de Base de Datos','EN_PROGRESO',2,24),
-  ('API de Autenticación','EN_PROGRESO',2,20),
-  ('Gestión de Proyectos (CRUD)','PENDIENTE',3,20),
-  ('Reporte básico','PENDIENTE',3,12)
-) AS t(titulo, estado, prioridad, est);
-
-
----
-Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\05-initial-data.sql
----
--- init-scripts/05-initial-data.sql
-
--- Roles básicos
-INSERT INTO roles (nombre, descripcion) VALUES 
-('Super Admin', 'Administrador del sistema con todos los permisos'),
-('Admin', 'Administrador con permisos de gestión'),
-('Gerente de Proyecto', 'Gestor de proyectos y equipos'),
-('Líder de Equipo', 'Líder de equipos de trabajo'),
-('Colaborador', 'Usuario colaborador básico')
-ON CONFLICT (nombre) DO NOTHING;
-
--- Usuario admin inicial (password: admin123) usando pgcrypto (bcrypt)
-INSERT INTO usuarios (email, password_hash, nombre, apellido, activo)
-VALUES ('admin@miempresa.com', crypt('admin123', gen_salt('bf')), 'Administrador', 'Sistema', TRUE)
-ON CONFLICT (email) DO UPDATE
-  SET password_hash = EXCLUDED.password_hash,
-      nombre = EXCLUDED.nombre,
-      apellido = EXCLUDED.apellido,
-      activo = TRUE;
-
--- Asignar rol Super Admin al admin
-INSERT INTO usuario_roles (usuario_id, rol_id, asignado_por)
-SELECT u.id, r.id, u.id
-FROM usuarios u
-JOIN roles r ON r.nombre = 'Super Admin'
-WHERE u.email = 'admin@miempresa.com'
-ON CONFLICT (usuario_id, rol_id) DO NOTHING;
-
--- Organización y Departamento demo
-INSERT INTO organizaciones (nombre, razon_social, pais)
-VALUES ('Mi Empresa S.A.', 'Mi Empresa Sociedad Anónima', 'Argentina')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO departamentos (nombre, descripcion, organizacion_id)
-SELECT 'Sistemas', 'Departamento de Tecnología', o.id
-FROM organizaciones o
-WHERE o.nombre = 'Mi Empresa S.A.'
-ON CONFLICT DO NOTHING;
-
-
----
-Ruta: C:\Users\Nahuel.Guzman\erp-database\init-scripts\06-fix-admin.sql
----
--- init-scripts/06-fix-admin.sql
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
--- Roles base
-INSERT INTO roles (nombre, descripcion) VALUES
-('Super Admin','Administrador del sistema con todos los permisos'),
-('Admin','Administrador con permisos de gestión'),
-('Gerente de Proyecto','Gestor de proyectos y equipos'),
-('Líder de Equipo','Líder de equipos de trabajo'),
-('Colaborador','Usuario colaborador básico')
-ON CONFLICT (nombre) DO NOTHING;
-
--- Admin inicial
-INSERT INTO usuarios (email, password_hash, nombre, apellido, activo)
-VALUES ('admin@miempresa.com', crypt('admin123', gen_salt('bf')), 'Administrador', 'Sistema', TRUE)
-ON CONFLICT (email) DO UPDATE
-SET password_hash = EXCLUDED.password_hash,
-    nombre = EXCLUDED.nombre,
-    apellido = EXCLUDED.apellido,
-    activo = TRUE;
-
--- Rol "Super Admin" para el admin
-INSERT INTO usuario_roles (usuario_id, rol_id)
-SELECT u.id, r.id
-FROM usuarios u
-JOIN roles r ON r.nombre = 'Super Admin'
-WHERE u.email = 'admin@miempresa.com'
-AND NOT EXISTS (
-  SELECT 1 FROM usuario_roles ur WHERE ur.usuario_id = u.id AND ur.rol_id = r.id
-);
-
-
----
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\__init__.py
----
-
----
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\config.py
----
 # api/app/config.py
 from typing import List
 from pydantic import Field, AliasChoices
@@ -438,8 +596,8 @@ def get_database_url_sync() -> str:
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\database.py
----
+api\app\database.py
+
 # api/app/database.py
 import logging
 from sqlalchemy import create_engine, MetaData, text
@@ -547,8 +705,8 @@ async def test_connection() -> bool:
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\main.py
----
+api\app\main.py
+
 # api/app/main.py
 
 from fastapi import FastAPI, HTTPException, status
@@ -678,12 +836,13 @@ if __name__ == "__main__":
     start_server()
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\auth\__init__.py
----
+api\app\auth\__init__.py
+
+
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\auth\models.py
----
+api\app\auth\models.py
+
 """
 Modelos SQLAlchemy para autenticación (relaciones desambiguadas)
 """
@@ -921,8 +1080,8 @@ class UsuarioDepartamento(Base):
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\auth\routes.py
----
+api\app\auth\routes.py
+
 """
 Rutas de autenticación
 """
@@ -935,14 +1094,22 @@ from typing import List
 import logging
 
 from ..database import get_async_db
-from ..utils.security import verify_password, get_password_hash, create_access_token, create_refresh_token
+from ..utils.security import (
+    verify_password, get_password_hash,
+    create_access_token, create_refresh_token,
+    get_user_id_from_refresh_token
+)
 from ..utils.dependencies import get_current_active_user, require_roles, get_pagination, Pagination
 from ..config import settings
 from .models import Usuario, Rol, UsuarioRol
 from .schemas import (
     LoginRequest, LoginResponse, UsuarioCreate, UsuarioUpdate, UsuarioResponse,
-    MessageResponse, ChangePasswordRequest, RolCreate, RolResponse, RolUpdate
+    MessageResponse, ChangePasswordRequest, RolCreate, RolResponse, RolUpdate,
+    RefreshTokenRequest
 )
+from jose import JWTError
+from ..utils.security import verify_password, get_password_hash, create_access_token, create_refresh_token, get_user_id_from_refresh_token
+from .schemas import RefreshTokenRequest, TokenRefreshResponse
 
 logger = logging.getLogger(__name__)
 
@@ -954,9 +1121,6 @@ async def login(
     login_data: LoginRequest,
     db: AsyncSession = Depends(get_async_db)
 ):
-    """
-    Autenticar usuario y generar tokens JWT
-    """
     try:
         stmt = (
             select(Usuario)
@@ -1006,6 +1170,33 @@ async def login(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error interno del servidor"
         )
+
+
+@auth_router.post("/refresh", response_model=TokenRefreshResponse)
+async def refresh_token(
+    payload: RefreshTokenRequest,
+    db: AsyncSession = Depends(get_async_db)
+):
+    try:
+        user_id = get_user_id_from_refresh_token(payload.refresh_token)
+
+        result = await db.execute(
+            select(Usuario).where(Usuario.id == user_id, Usuario.activo == True)
+        )
+        user = result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inválido")
+
+        new_access = create_access_token(data={"sub": str(user.id)})
+        return TokenRefreshResponse(
+            access_token=new_access,
+            expires_in=settings.access_token_expire_minutes * 60,
+        )
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token inválido o expirado")
+    except Exception as e:
+        logger.error(f"Error en refresh: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno del servidor")
 
 
 @auth_router.get("/me", response_model=UsuarioResponse)
@@ -1125,9 +1316,9 @@ async def create_user(
             telefono=user_data.telefono
         )
         db.add(new_user)
-        await db.flush()  # obtener ID
+        await db.flush()
 
-        # Asignar roles (creando filas en usuario_roles)
+        # Asignar roles
         for role_id in (user_data.roles or []):
             role = (await db.execute(select(Rol).where(and_(Rol.id == role_id, Rol.activo == True)))).scalar_one_or_none()
             if role:
@@ -1136,7 +1327,6 @@ async def create_user(
         await db.commit()
         await db.refresh(new_user)
 
-        # Recargar con relaciones M2M resueltas
         new_user = (await db.execute(
             select(Usuario)
             .options(selectinload(Usuario.roles), selectinload(Usuario.departamentos))
@@ -1202,8 +1392,8 @@ async def list_roles(
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\auth\schemas.py
----
+api\app\auth\schemas.py
+
 """
 Schemas Pydantic para autenticación y validación
 """
@@ -1482,6 +1672,13 @@ class PaginatedResponse(BaseModel):
 # ============================================
 # CONFIGURAR FORWARD REFERENCES
 # ============================================
+# ... imports y clases previas ...
+
+class TokenRefreshResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
 
 # Actualizar forward references
 UsuarioResponse.model_rebuild()
@@ -1490,8 +1687,8 @@ DepartamentoResponse.model_rebuild()
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\projects\__init__.py
----
+api\app\projects\__init__.py
+
 # Exponer router y modelos del módulo projects
 from .routes import router
 from .models import Proyecto, Tarea
@@ -1500,8 +1697,8 @@ __all__ = ["router", "Proyecto", "Tarea"]
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\projects\models.py
----
+api\app\projects\models.py
+
 from sqlalchemy import Column, Integer, String, Text, Boolean, Date, DateTime, Numeric, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -1565,24 +1762,54 @@ class Tarea(Base):
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\projects\routes.py
----
-from fastapi import APIRouter, Depends, HTTPException, status
+api\app\projects\routes.py
+
+# api/app/projects/routes.py
+from fastapi import APIRouter, Depends, HTTPException, status, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
+from typing import Optional, List
+from pydantic import BaseModel, EmailStr
+
 from ..database import get_async_db
-from ..utils.dependencies import get_current_active_user
+from ..utils.dependencies import get_current_active_user, require_permissions
 from .models import Proyecto, Tarea
 from .schemas import (
     ProyectoCreate, ProyectoUpdate, ProyectoResponse,
     TareaCreate, TareaUpdate, TareaResponse, ResumenEstadoItem
 )
 
+# IMPORTANTE: mantenemos este nombre porque main.py hace `from .projects import router`
 router = APIRouter()
 
-# ---- PROYECTOS ----
+# --------------------------- Helpers de membresía/seguridad ---------------------------
+
+async def _is_admin(db: AsyncSession, user_id: int) -> bool:
+    q = text("""
+        SELECT 1
+        FROM usuario_roles ur
+        JOIN roles r ON r.id = ur.rol_id
+        WHERE ur.usuario_id = :uid AND r.nombre IN ('Super Admin','Admin')
+        LIMIT 1
+    """)
+    return (await db.execute(q, {"uid": user_id})).scalar() is not None
+
+async def _project_exists(db: AsyncSession, project_id: int) -> bool:
+    q = text("SELECT 1 FROM proyectos WHERE id = :pid AND deleted_at IS NULL")
+    return (await db.execute(q, {"pid": project_id})).scalar() is not None
+
+async def _is_member(db: AsyncSession, project_id: int, user_id: int) -> bool:
+    q = text("SELECT 1 FROM proyecto_miembros WHERE proyecto_id = :pid AND usuario_id = :uid")
+    return (await db.execute(q, {"pid": project_id, "uid": user_id})).scalar() is not None
+
+# --------------------------- Proyectos ---------------------------
+
 @router.post("", response_model=ProyectoResponse)
-async def create_project(data: ProyectoCreate, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+async def create_project(
+    data: ProyectoCreate,
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("write:projects"))
+):
     p = Proyecto(
         codigo=data.codigo,
         nombre=data.nombre,
@@ -1595,14 +1822,40 @@ async def create_project(data: ProyectoCreate, db: AsyncSession = Depends(get_as
     await db.refresh(p)
     return ProyectoResponse.model_validate(p)
 
-@router.get("", response_model=list[ProyectoResponse])
-async def list_projects(db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
-    result = await db.execute(select(Proyecto).where(Proyecto.deleted_at.is_(None)))
-    items = result.scalars().all()
-    return [ProyectoResponse.model_validate(i) for i in items]
+@router.get("", response_model=list[ProyectoResponse], summary="Listar proyectos visibles")
+async def list_projects(
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("read:projects"))
+):
+    # Admin ve todos; colaborador solo los que es miembro
+    if await _is_admin(db, user.id):
+        result = await db.execute(select(Proyecto).where(Proyecto.deleted_at.is_(None)))
+        items = result.scalars().all()
+        return [ProyectoResponse.model_validate(i) for i in items]
+    else:
+        q = text("""
+            SELECT id, uuid, codigo, nombre, estado, prioridad, avance_pct, presupuesto_monto
+            FROM proyectos p
+            WHERE p.deleted_at IS NULL
+              AND EXISTS (SELECT 1 FROM proyecto_miembros pm
+                          WHERE pm.proyecto_id = p.id AND pm.usuario_id = :uid)
+            ORDER BY id
+        """)
+        rows = (await db.execute(q, {"uid": user.id})).mappings().all()
+        return [ProyectoResponse(**dict(r)) for r in rows]
 
-@router.get("/{project_id}", response_model=ProyectoResponse)
-async def get_project(project_id: int, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+@router.get("/{project_id}", response_model=ProyectoResponse, summary="Obtener proyecto si hay acceso")
+async def get_project(
+    project_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("read:projects"))
+):
+    if not await _project_exists(db, project_id):
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+
+    if not (await _is_admin(db, user.id) or await _is_member(db, project_id, user.id)):
+        raise HTTPException(status_code=403, detail="Sin acceso a este proyecto")
+
     result = await db.execute(select(Proyecto).where(Proyecto.id == project_id, Proyecto.deleted_at.is_(None)))
     p = result.scalar_one_or_none()
     if not p:
@@ -1610,7 +1863,12 @@ async def get_project(project_id: int, db: AsyncSession = Depends(get_async_db),
     return ProyectoResponse.model_validate(p)
 
 @router.patch("/{project_id}", response_model=ProyectoResponse)
-async def update_project(project_id: int, data: ProyectoUpdate, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+async def update_project(
+    project_id: int,
+    data: ProyectoUpdate,
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("write:projects"))
+):
     result = await db.execute(select(Proyecto).where(Proyecto.id == project_id, Proyecto.deleted_at.is_(None)))
     p = result.scalar_one_or_none()
     if not p:
@@ -1621,9 +1879,14 @@ async def update_project(project_id: int, data: ProyectoUpdate, db: AsyncSession
     await db.refresh(p)
     return ProyectoResponse.model_validate(p)
 
-# ---- TAREAS ----
+# --------------------------- Tareas ---------------------------
+
 @router.post("/tasks", response_model=TareaResponse)
-async def create_task(data: TareaCreate, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+async def create_task(
+    data: TareaCreate,
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("write:tasks"))
+):
     # validar proyecto
     result = await db.execute(select(Proyecto.id).where(Proyecto.id == data.proyecto_id, Proyecto.deleted_at.is_(None)))
     if not result.scalar_one_or_none():
@@ -1641,13 +1904,23 @@ async def create_task(data: TareaCreate, db: AsyncSession = Depends(get_async_db
     return TareaResponse.model_validate(t)
 
 @router.get("/{project_id}/tasks", response_model=list[TareaResponse])
-async def list_tasks(project_id: int, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+async def list_tasks(
+    project_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("read:tasks"))
+):
+    # Nota: si quieres, puedes aplicar el mismo control de acceso que en get_project
     result = await db.execute(select(Tarea).where(Tarea.proyecto_id == project_id, Tarea.deleted_at.is_(None)))
     items = result.scalars().all()
     return [TareaResponse.model_validate(i) for i in items]
 
 @router.patch("/tasks/{task_id}", response_model=TareaResponse)
-async def update_task(task_id: int, data: TareaUpdate, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+async def update_task(
+    task_id: int,
+    data: TareaUpdate,
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("write:tasks"))
+):
     result = await db.execute(select(Tarea).where(Tarea.id == task_id, Tarea.deleted_at.is_(None)))
     t = result.scalar_one_or_none()
     if not t:
@@ -1658,9 +1931,14 @@ async def update_task(task_id: int, data: TareaUpdate, db: AsyncSession = Depend
     await db.refresh(t)
     return TareaResponse.model_validate(t)
 
-# ---- Reporte simple (vista) ----
+# --------------------------- Reporte simple (vista) ---------------------------
+
 @router.get("/{project_id}/report/estado", response_model=list[ResumenEstadoItem])
-async def resumen_por_estado(project_id: int, db: AsyncSession = Depends(get_async_db), user=Depends(get_current_active_user)):
+async def resumen_por_estado(
+    project_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("read:reports"))
+):
     q = text("""
         SELECT proyecto_id, proyecto, estado, cantidad
         FROM vw_resumen_tareas_por_estado
@@ -1671,13 +1949,105 @@ async def resumen_por_estado(project_id: int, db: AsyncSession = Depends(get_asy
     rows = result.mappings().all()
     return [ResumenEstadoItem(**dict(r)) for r in rows]
 
+# --------------------------- Miembros del proyecto ---------------------------
+
+class MemberCreate(BaseModel):
+    usuario_id: Optional[int] = None
+    email: Optional[EmailStr] = None
+
+class MemberOut(BaseModel):
+    id: int
+    email: EmailStr
+    nombre: Optional[str] = None
+    apellido: Optional[str] = None
+    rol_en_proyecto: str = "MIEMBRO"
+
+@router.get("/{project_id}/members", response_model=List[MemberOut], summary="Listar miembros")
+async def list_members(
+    project_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("read:projects"))
+):
+    if not await _project_exists(db, project_id):
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    if not (await _is_admin(db, user.id) or await _is_member(db, project_id, user.id)):
+        raise HTTPException(status_code=403, detail="Sin acceso a este proyecto")
+
+    q = text("""
+        SELECT u.id, u.email, u.nombre, u.apellido, pm.rol_en_proyecto
+        FROM proyecto_miembros pm
+        JOIN usuarios u ON u.id = pm.usuario_id
+        WHERE pm.proyecto_id = :pid
+        ORDER BY u.nombre, u.apellido, u.email
+    """)
+    rows = (await db.execute(q, {"pid": project_id})).mappings().all()
+    return [MemberOut(**dict(r)) for r in rows]
+
+@router.post("/{project_id}/members", response_model=MemberOut, status_code=201, summary="Agregar miembro (solo Admin)")
+async def add_member(
+    project_id: int,
+    payload: MemberCreate,
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("write:projects"))
+):
+    if not await _project_exists(db, project_id):
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    if not await _is_admin(db, user.id):
+        raise HTTPException(status_code=403, detail="Solo Admin puede agregar miembros")
+
+    usuario_id = payload.usuario_id
+    if not usuario_id and payload.email:
+        uid = (await db.execute(text("SELECT id FROM usuarios WHERE email=:em"), {"em": payload.email})).scalar()
+        if not uid:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        usuario_id = uid
+    if not usuario_id:
+        raise HTTPException(status_code=422, detail="Debes enviar usuario_id o email")
+
+    await db.execute(text("""
+        INSERT INTO proyecto_miembros (proyecto_id, usuario_id)
+        VALUES (:pid, :uid)
+        ON CONFLICT (proyecto_id, usuario_id) DO NOTHING
+    """), {"pid": project_id, "uid": usuario_id})
+    await db.commit()
+
+    q = text("""
+        SELECT u.id, u.email, u.nombre, u.apellido, pm.rol_en_proyecto
+        FROM proyecto_miembros pm
+        JOIN usuarios u ON u.id = pm.usuario_id
+        WHERE pm.proyecto_id = :pid AND pm.usuario_id = :uid
+    """)
+    row = (await db.execute(q, {"pid": project_id, "uid": usuario_id})).mappings().first()
+    return MemberOut(**dict(row))
+
+@router.delete("/{project_id}/members/{usuario_id}", status_code=204, summary="Quitar miembro (solo Admin)")
+async def remove_member(
+    project_id: int,
+    usuario_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    user = Depends(require_permissions("write:projects"))
+):
+    if not await _project_exists(db, project_id):
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    if not await _is_admin(db, user.id):
+        raise HTTPException(status_code=403, detail="Solo Admin puede quitar miembros")
+
+    res = await db.execute(text("""
+        DELETE FROM proyecto_miembros
+        WHERE proyecto_id = :pid AND usuario_id = :uid
+    """), {"pid": project_id, "uid": usuario_id})
+    if res.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Membresía no encontrada")
+    await db.commit()
+    return Response(status_code=204)
+
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\projects\schemas.py
----
+api\app\projects\schemas.py
+
 # api/app/projects/schemas.py
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Dict, List
 from datetime import date
 import uuid
 
@@ -1741,14 +2111,26 @@ class ResumenEstadoItem(BaseModel):
     estado: str
     cantidad: int
 
+# ==== Opcionales de conveniencia ====
+
+class ProyectoSummary(BaseModel):
+    proyecto: ProyectoResponse
+    total_tareas: int
+    por_estado: Dict[str, int]
+    tareas: List[TareaResponse]
+
+class ProyectoStateUpdate(BaseModel):
+    estado: Optional[str] = None
+
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\utils\__init__.py
----
+api\app\utils\__init__.py
+
+
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\utils\dependencies.py
----
+api\app\utils\dependencies.py
+
 # api/app/utils/dependencies.py
 from typing import Optional, Callable
 import logging
@@ -1902,8 +2284,8 @@ def get_pagination(page: int = 1, per_page: int = 50) -> Pagination:
 
 
 ---
-Ruta: C:\Users\Nahuel.Guzman\erp-database\api\app\utils\security.py
----
+api\app\utils\security.py
+
 # api/app/utils/security.py
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Dict
@@ -1929,52 +2311,30 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
 
 
 def _jwt_encode(claims: Dict[str, Any]) -> str:
-    """
-    Encapsula el encode, usa secret y algorithm de settings.
-    """
     return jwt.encode(claims, settings.secret_key, algorithm=settings.algorithm)
 
 
 def _jwt_decode(token: str) -> Dict[str, Any]:
-    """
-    Decodifica y valida firma/exp.
-    Lanza JWTError si no es válido.
-    """
     return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
 
 
 def create_access_token(data: Dict[str, Any], expires_minutes: Optional[int] = None) -> str:
-    """
-    Crea un access token JWT.
-    Debe incluir data["sub"] como string o int del user_id.
-    """
     to_encode = data.copy()
-
     exp_minutes = expires_minutes if expires_minutes is not None else settings.access_token_expire_minutes
     expire = datetime.now(timezone.utc) + timedelta(minutes=int(exp_minutes))
-
-    # Recomendación: asegurar string en "sub"
     if "sub" in to_encode:
         to_encode["sub"] = str(to_encode["sub"])
-
     to_encode.update({"exp": expire, "type": "access"})
     return _jwt_encode(to_encode)
 
 
 def create_refresh_token(user_id: int, days: int = 30) -> str:
-    """
-    Crea un refresh token simple.
-    """
     expire = datetime.now(timezone.utc) + timedelta(days=days)
     to_encode = {"sub": str(user_id), "exp": expire, "type": "refresh"}
     return _jwt_encode(to_encode)
 
 
 def get_user_id_from_token(token: str) -> int:
-    """
-    Devuelve el user_id (int) desde "sub" del JWT.
-    Lanza JWTError si es inválido/expirado.
-    """
     try:
         payload = _jwt_decode(token)
         sub = payload.get("sub")
@@ -1982,7 +2342,3258 @@ def get_user_id_from_token(token: str) -> int:
             raise JWTError("Token sin 'sub'")
         return int(sub)
     except Exception as e:
-        # Re-empaquetar como JWTError para que los callers traten 401
         raise JWTError(f"Token inválido: {e}") from e
 
+# api/app/utils/security.py (sección final “refresh”)
+from jose import JWTError
 
+def get_user_id_from_refresh_token(token: str) -> int:
+    try:
+        payload = _jwt_decode(token)
+        if payload.get("type") != "refresh":
+            raise JWTError("Token no es de tipo refresh")
+        sub = payload.get("sub")
+        if not sub:
+            raise JWTError("Refresh token sin 'sub'")
+        return int(sub)
+    except JWTError:
+        raise
+    except Exception as e:
+        raise JWTError(f"Refresh inválido: {e}") from e
+
+
+---
+init-scripts\01-schema.sql
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- ===== Usuarios / Roles =====
+CREATE TABLE IF NOT EXISTS usuarios (
+  id             SERIAL PRIMARY KEY,
+  uuid           UUID NOT NULL DEFAULT gen_random_uuid(),
+  email          TEXT NOT NULL UNIQUE,
+  password_hash  TEXT NOT NULL,
+  nombre         TEXT NOT NULL,
+  apellido       TEXT NOT NULL,
+  telefono       TEXT,
+  activo         BOOLEAN NOT NULL DEFAULT TRUE,
+  ultimo_login   TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at     TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS roles (
+  id          SERIAL PRIMARY KEY,
+  nombre      TEXT NOT NULL UNIQUE,
+  descripcion TEXT,
+  activo      BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at  TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS usuario_roles (
+  id           SERIAL PRIMARY KEY,
+  usuario_id   INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  rol_id       INT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  asignado_por INT REFERENCES usuarios(id),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- garantizar que no se dupliquen asignaciones usuario-rol
+CREATE UNIQUE INDEX IF NOT EXISTS uq_usuario_roles_usuario_rol
+  ON usuario_roles(usuario_id, rol_id);
+
+-- Índices útiles
+CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email);
+CREATE INDEX IF NOT EXISTS idx_usuarios_activo ON usuarios(activo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_usuario_roles_usuario ON usuario_roles(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_usuario_roles_rol ON usuario_roles(rol_id);
+
+-- ===== Organización / Departamentos =====
+CREATE TABLE IF NOT EXISTS organizaciones (
+  id            SERIAL PRIMARY KEY,
+  uuid          UUID NOT NULL DEFAULT gen_random_uuid(),
+  nombre        TEXT NOT NULL,
+  razon_social  TEXT,
+  rfc           TEXT,
+  telefono      TEXT,
+  email         TEXT,
+  direccion     TEXT,
+  ciudad        TEXT,
+  estado        TEXT,
+  codigo_postal TEXT,
+  pais          TEXT NOT NULL DEFAULT 'Argentina',
+  activa        BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at    TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS departamentos (
+  id                     SERIAL PRIMARY KEY,
+  uuid                   UUID NOT NULL DEFAULT gen_random_uuid(),
+  nombre                 TEXT NOT NULL,
+  descripcion            TEXT,
+  organizacion_id        INT REFERENCES organizaciones(id) ON DELETE CASCADE,
+  departamento_padre_id  INT REFERENCES departamentos(id),
+  responsable_id         INT REFERENCES usuarios(id),
+  activo                 BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at             TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS usuario_departamentos (
+  id               SERIAL PRIMARY KEY,
+  usuario_id       INT REFERENCES usuarios(id) ON DELETE CASCADE,
+  departamento_id  INT REFERENCES departamentos(id) ON DELETE CASCADE,
+  es_responsable   BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Índices parciales para soft delete
+CREATE INDEX IF NOT EXISTS idx_orgs_activas ON organizaciones(id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_deptos_activos ON departamentos(id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_usuario_deptos_usuario ON usuario_departamentos(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_usuario_deptos_depto ON usuario_departamentos(departamento_id);
+
+
+---
+init-scripts\02-datos-iniciales.sql
+
+-- init-scripts/02-datos-iniciales.sql
+-- Este archivo se deja mínimo para evitar duplicar DDL del 01.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+
+---
+init-scripts\03-schema-projects.sql
+
+-- init-scripts/03-schema-projects.sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS proyectos (
+  id                 SERIAL PRIMARY KEY,
+  uuid               UUID NOT NULL DEFAULT gen_random_uuid(),
+  codigo             TEXT UNIQUE,
+  nombre             TEXT NOT NULL,
+  descripcion        TEXT,
+  organizacion_id    INT REFERENCES organizaciones(id) ON DELETE SET NULL,
+  gerente_proyecto_id INT REFERENCES usuarios(id) ON DELETE SET NULL,
+  sponsor_id         INT REFERENCES usuarios(id) ON DELETE SET NULL,
+  prioridad          SMALLINT NOT NULL DEFAULT 3,
+  estado             TEXT NOT NULL DEFAULT 'EN_PROGRESO',
+  presupuesto_monto  NUMERIC(14,2) DEFAULT 0,
+  avance_pct         NUMERIC(5,2)  DEFAULT 0,
+  fecha_inicio       DATE,
+  fecha_fin_plan     DATE,
+  fecha_fin_real     DATE,
+  activo             BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at         TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_proy_codigo ON proyectos(codigo) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_proy_estado ON proyectos(estado) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS tareas (
+  id              SERIAL PRIMARY KEY,
+  uuid            UUID NOT NULL DEFAULT gen_random_uuid(),
+  proyecto_id     INT NOT NULL REFERENCES proyectos(id) ON DELETE CASCADE,
+  titulo          TEXT NOT NULL,
+  descripcion     TEXT,
+  estado          TEXT NOT NULL DEFAULT 'PENDIENTE',
+  prioridad       SMALLINT NOT NULL DEFAULT 3,
+  asignado_a      INT REFERENCES usuarios(id) ON DELETE SET NULL,
+  estimado_horas  NUMERIC(10,2) DEFAULT 0,
+  real_horas      NUMERIC(10,2) DEFAULT 0,
+  fecha_inicio    DATE,
+  fecha_fin_plan  DATE,
+  fecha_fin_real  DATE,
+  activo          BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at      TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_tareas_proyecto ON tareas(proyecto_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tareas_estado ON tareas(estado) WHERE deleted_at IS NULL;
+
+CREATE OR REPLACE VIEW vw_resumen_tareas_por_estado AS
+SELECT
+  p.id AS proyecto_id,
+  p.nombre AS proyecto,
+  t.estado,
+  COUNT(*)::int AS cantidad
+FROM proyectos p
+JOIN tareas t ON t.proyecto_id = p.id AND t.deleted_at IS NULL
+WHERE p.deleted_at IS NULL
+GROUP BY p.id, p.nombre, t.estado
+ORDER BY p.id, t.estado;
+
+
+---
+init-scripts\04-data-demo.sql
+
+-- init-scripts/04-data-demo.sql
+WITH upsert AS (
+  INSERT INTO proyectos (codigo, nombre, estado, prioridad, presupuesto_monto)
+  VALUES ('DEMO-2024-001','Implementación de Sistema ERP','EN_PROGRESO',2,500000)
+  ON CONFLICT (codigo) DO NOTHING
+  RETURNING id
+)
+INSERT INTO tareas (proyecto_id, titulo, estado, prioridad, estimado_horas)
+SELECT COALESCE((SELECT id FROM upsert), (SELECT id FROM proyectos WHERE codigo='DEMO-2024-001' LIMIT 1)),
+       t.titulo, t.estado, t.prioridad, t.est
+FROM (VALUES
+  ('Análisis de Requerimientos','HECHA',2,16),
+  ('Diseño de Base de Datos','EN_PROGRESO',2,24),
+  ('API de Autenticación','EN_PROGRESO',2,20),
+  ('Gestión de Proyectos (CRUD)','PENDIENTE',3,20),
+  ('Reporte básico','PENDIENTE',3,12)
+) AS t(titulo, estado, prioridad, est);
+
+
+---
+init-scripts\05-initial-data.sql
+
+-- init-scripts/05-initial-data.sql
+
+-- Roles básicos
+INSERT INTO roles (nombre, descripcion) VALUES 
+('Super Admin', 'Administrador del sistema con todos los permisos'),
+('Admin', 'Administrador con permisos de gestión'),
+('Gerente de Proyecto', 'Gestor de proyectos y equipos'),
+('Líder de Equipo', 'Líder de equipos de trabajo'),
+('Colaborador', 'Usuario colaborador básico')
+ON CONFLICT (nombre) DO NOTHING;
+
+-- Usuario admin inicial (password: admin123) usando pgcrypto (bcrypt)
+INSERT INTO usuarios (email, password_hash, nombre, apellido, activo)
+VALUES ('admin@miempresa.com', crypt('admin123', gen_salt('bf')), 'Administrador', 'Sistema', TRUE)
+ON CONFLICT (email) DO UPDATE
+  SET password_hash = EXCLUDED.password_hash,
+      nombre = EXCLUDED.nombre,
+      apellido = EXCLUDED.apellido,
+      activo = TRUE;
+
+-- Asignar rol Super Admin al admin
+INSERT INTO usuario_roles (usuario_id, rol_id, asignado_por)
+SELECT u.id, r.id, u.id
+FROM usuarios u
+JOIN roles r ON r.nombre = 'Super Admin'
+WHERE u.email = 'admin@miempresa.com'
+ON CONFLICT (usuario_id, rol_id) DO NOTHING;
+
+-- Organización y Departamento demo
+INSERT INTO organizaciones (nombre, razon_social, pais)
+VALUES ('Mi Empresa S.A.', 'Mi Empresa Sociedad Anónima', 'Argentina')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO departamentos (nombre, descripcion, organizacion_id)
+SELECT 'Sistemas', 'Departamento de Tecnología', o.id
+FROM organizaciones o
+WHERE o.nombre = 'Mi Empresa S.A.'
+ON CONFLICT DO NOTHING;
+
+
+---
+init-scripts\06-fix-admin.sql
+
+-- init-scripts/06-fix-admin.sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Roles base
+INSERT INTO roles (nombre, descripcion) VALUES
+('Super Admin','Administrador del sistema con todos los permisos'),
+('Admin','Administrador con permisos de gestión'),
+('Gerente de Proyecto','Gestor de proyectos y equipos'),
+('Líder de Equipo','Líder de equipos de trabajo'),
+('Colaborador','Usuario colaborador básico')
+ON CONFLICT (nombre) DO NOTHING;
+
+-- Admin inicial
+INSERT INTO usuarios (email, password_hash, nombre, apellido, activo)
+VALUES ('admin@miempresa.com', crypt('admin123', gen_salt('bf')), 'Administrador', 'Sistema', TRUE)
+ON CONFLICT (email) DO UPDATE
+SET password_hash = EXCLUDED.password_hash,
+    nombre = EXCLUDED.nombre,
+    apellido = EXCLUDED.apellido,
+    activo = TRUE;
+
+-- Rol "Super Admin" para el admin
+INSERT INTO usuario_roles (usuario_id, rol_id)
+SELECT u.id, r.id
+FROM usuarios u
+JOIN roles r ON r.nombre = 'Super Admin'
+WHERE u.email = 'admin@miempresa.com'
+AND NOT EXISTS (
+  SELECT 1 FROM usuario_roles ur WHERE ur.usuario_id = u.id AND ur.rol_id = r.id
+);
+
+
+---
+init-scripts\07-sample-collaborators.sql
+
+-- 07-sample-collaborators.sql 
+CREATE EXTENSION IF NOT EXISTS pgcrypto; 
+-- Asegurar rol Colaborador 
+INSERT INTO roles (nombre, descripcion) VALUES ('Colaborador','Usuario colaborador básico') ON CONFLICT (nombre) DO NOTHING;
+-- Tres cuentas demo (password: user123) 
+INSERT INTO usuarios (email, password_hash, nombre, apellido, activo) VALUES 
+('colab1@miempresa.com', crypt('user123', gen_salt('bf')), 'Colab', 'Uno', TRUE), 
+('colab2@miempresa.com', crypt('user123', gen_salt('bf')), 'Colab', 'Dos', TRUE), 
+('colab3@miempresa.com', crypt('user123', gen_salt('bf')), 'Colab', 'Tres', TRUE) 
+ON CONFLICT (email) DO NOTHING; 
+-- Asignar rol Colaborador 
+INSERT INTO usuario_roles (usuario_id, rol_id) 
+SELECT u.id, r.id 
+FROM usuarios u 
+JOIN roles r ON r.nombre='Colaborador' 
+WHERE u.email IN ('colab1@miempresa.com','colab2@miempresa.com','colab3@miempresa.com') 
+ON CONFLICT (usuario_id, rol_id) DO NOTHING;
+
+---
+init-scripts\08-project-membership.sql
+
+-- 08-project-membership.sql
+-- Relación proyecto <-> usuario (membresías)
+CREATE TABLE IF NOT EXISTS proyecto_miembros (
+  id SERIAL PRIMARY KEY,
+  proyecto_id INTEGER NOT NULL REFERENCES proyectos(id) ON DELETE CASCADE,
+  usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  rol_en_proyecto VARCHAR(30) DEFAULT 'MIEMBRO',
+  creado_en TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (proyecto_id, usuario_id)
+);
+
+-- Índices útiles
+CREATE INDEX IF NOT EXISTS idx_proyecto_miembros_proyecto ON proyecto_miembros(proyecto_id);
+CREATE INDEX IF NOT EXISTS idx_proyecto_miembros_usuario ON proyecto_miembros(usuario_id);
+
+
+---
+web\.env
+
+VITE_API_URL=http://localhost:8000
+
+
+---
+web\index.html
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ERP MVP</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+
+---
+web\package-lock.json
+
+{
+  "name": "erp-mvp-web",
+  "version": "0.0.1",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "erp-mvp-web",
+      "version": "0.0.1",
+      "dependencies": {
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "react-router-dom": "^6.26.1"
+      },
+      "devDependencies": {
+        "@types/react": "^18.3.8",
+        "@types/react-dom": "^18.3.0",
+        "@vitejs/plugin-react": "^4.3.1",
+        "typescript": "^5.6.2",
+        "vite": "^5.4.1"
+      }
+    },
+    "node_modules/@babel/code-frame": {
+      "version": "7.27.1",
+      "resolved": "https://registry.npmjs.org/@babel/code-frame/-/code-frame-7.27.1.tgz",
+      "integrity": "sha512-cjQ7ZlQ0Mv3b47hABuTevyTuYN4i+loJKGeV9flcCgIK37cCXRh+L1bd3iBHlynerhQ7BhCkn2BPbQUL+rGqFg==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/helper-validator-identifier": "^7.27.1",
+        "js-tokens": "^4.0.0",
+        "picocolors": "^1.1.1"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/compat-data": {
+      "version": "7.28.4",
+      "resolved": "https://registry.npmjs.org/@babel/compat-data/-/compat-data-7.28.4.tgz",
+      "integrity": "sha512-YsmSKC29MJwf0gF8Rjjrg5LQCmyh+j/nD8/eP7f+BeoQTKYqs9RoWbjGOdy0+1Ekr68RJZMUOPVQaQisnIo4Rw==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/core": {
+      "version": "7.28.4",
+      "resolved": "https://registry.npmjs.org/@babel/core/-/core-7.28.4.tgz",
+      "integrity": "sha512-2BCOP7TN8M+gVDj7/ht3hsaO/B/n5oDbiAyyvnRlNOs+u1o+JWNYTQrmpuNp1/Wq2gcFrI01JAW+paEKDMx/CA==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/code-frame": "^7.27.1",
+        "@babel/generator": "^7.28.3",
+        "@babel/helper-compilation-targets": "^7.27.2",
+        "@babel/helper-module-transforms": "^7.28.3",
+        "@babel/helpers": "^7.28.4",
+        "@babel/parser": "^7.28.4",
+        "@babel/template": "^7.27.2",
+        "@babel/traverse": "^7.28.4",
+        "@babel/types": "^7.28.4",
+        "@jridgewell/remapping": "^2.3.5",
+        "convert-source-map": "^2.0.0",
+        "debug": "^4.1.0",
+        "gensync": "^1.0.0-beta.2",
+        "json5": "^2.2.3",
+        "semver": "^6.3.1"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      },
+      "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/babel"
+      }
+    },
+    "node_modules/@babel/generator": {
+      "version": "7.28.3",
+      "resolved": "https://registry.npmjs.org/@babel/generator/-/generator-7.28.3.tgz",
+      "integrity": "sha512-3lSpxGgvnmZznmBkCRnVREPUFJv2wrv9iAoFDvADJc0ypmdOxdUtcLeBgBJ6zE0PMeTKnxeQzyk0xTBq4Ep7zw==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/parser": "^7.28.3",
+        "@babel/types": "^7.28.2",
+        "@jridgewell/gen-mapping": "^0.3.12",
+        "@jridgewell/trace-mapping": "^0.3.28",
+        "jsesc": "^3.0.2"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/helper-compilation-targets": {
+      "version": "7.27.2",
+      "resolved": "https://registry.npmjs.org/@babel/helper-compilation-targets/-/helper-compilation-targets-7.27.2.tgz",
+      "integrity": "sha512-2+1thGUUWWjLTYTHZWK1n8Yga0ijBz1XAhUXcKy81rd5g6yh7hGqMp45v7cadSbEHc9G3OTv45SyneRN3ps4DQ==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/compat-data": "^7.27.2",
+        "@babel/helper-validator-option": "^7.27.1",
+        "browserslist": "^4.24.0",
+        "lru-cache": "^5.1.1",
+        "semver": "^6.3.1"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/helper-globals": {
+      "version": "7.28.0",
+      "resolved": "https://registry.npmjs.org/@babel/helper-globals/-/helper-globals-7.28.0.tgz",
+      "integrity": "sha512-+W6cISkXFa1jXsDEdYA8HeevQT/FULhxzR99pxphltZcVaugps53THCeiWA8SguxxpSp3gKPiuYfSWopkLQ4hw==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/helper-module-imports": {
+      "version": "7.27.1",
+      "resolved": "https://registry.npmjs.org/@babel/helper-module-imports/-/helper-module-imports-7.27.1.tgz",
+      "integrity": "sha512-0gSFWUPNXNopqtIPQvlD5WgXYI5GY2kP2cCvoT8kczjbfcfuIljTbcWrulD1CIPIX2gt1wghbDy08yE1p+/r3w==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/traverse": "^7.27.1",
+        "@babel/types": "^7.27.1"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/helper-module-transforms": {
+      "version": "7.28.3",
+      "resolved": "https://registry.npmjs.org/@babel/helper-module-transforms/-/helper-module-transforms-7.28.3.tgz",
+      "integrity": "sha512-gytXUbs8k2sXS9PnQptz5o0QnpLL51SwASIORY6XaBKF88nsOT0Zw9szLqlSGQDP/4TljBAD5y98p2U1fqkdsw==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/helper-module-imports": "^7.27.1",
+        "@babel/helper-validator-identifier": "^7.27.1",
+        "@babel/traverse": "^7.28.3"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      },
+      "peerDependencies": {
+        "@babel/core": "^7.0.0"
+      }
+    },
+    "node_modules/@babel/helper-plugin-utils": {
+      "version": "7.27.1",
+      "resolved": "https://registry.npmjs.org/@babel/helper-plugin-utils/-/helper-plugin-utils-7.27.1.tgz",
+      "integrity": "sha512-1gn1Up5YXka3YYAHGKpbideQ5Yjf1tDa9qYcgysz+cNCXukyLl6DjPXhD3VRwSb8c0J9tA4b2+rHEZtc6R0tlw==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/helper-string-parser": {
+      "version": "7.27.1",
+      "resolved": "https://registry.npmjs.org/@babel/helper-string-parser/-/helper-string-parser-7.27.1.tgz",
+      "integrity": "sha512-qMlSxKbpRlAridDExk92nSobyDdpPijUq2DW6oDnUqd0iOGxmQjyqhMIihI9+zv4LPyZdRje2cavWPbCbWm3eA==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/helper-validator-identifier": {
+      "version": "7.27.1",
+      "resolved": "https://registry.npmjs.org/@babel/helper-validator-identifier/-/helper-validator-identifier-7.27.1.tgz",
+      "integrity": "sha512-D2hP9eA+Sqx1kBZgzxZh0y1trbuU+JoDkiEwqhQ36nodYqJwyEIhPSdMNd7lOm/4io72luTPWH20Yda0xOuUow==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/helper-validator-option": {
+      "version": "7.27.1",
+      "resolved": "https://registry.npmjs.org/@babel/helper-validator-option/-/helper-validator-option-7.27.1.tgz",
+      "integrity": "sha512-YvjJow9FxbhFFKDSuFnVCe2WxXk1zWc22fFePVNEaWJEu8IrZVlda6N0uHwzZrUM1il7NC9Mlp4MaJYbYd9JSg==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/helpers": {
+      "version": "7.28.4",
+      "resolved": "https://registry.npmjs.org/@babel/helpers/-/helpers-7.28.4.tgz",
+      "integrity": "sha512-HFN59MmQXGHVyYadKLVumYsA9dBFun/ldYxipEjzA4196jpLZd8UjEEBLkbEkvfYreDqJhZxYAWFPtrfhNpj4w==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/template": "^7.27.2",
+        "@babel/types": "^7.28.4"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/parser": {
+      "version": "7.28.4",
+      "resolved": "https://registry.npmjs.org/@babel/parser/-/parser-7.28.4.tgz",
+      "integrity": "sha512-yZbBqeM6TkpP9du/I2pUZnJsRMGGvOuIrhjzC1AwHwW+6he4mni6Bp/m8ijn0iOuZuPI2BfkCoSRunpyjnrQKg==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/types": "^7.28.4"
+      },
+      "bin": {
+        "parser": "bin/babel-parser.js"
+      },
+      "engines": {
+        "node": ">=6.0.0"
+      }
+    },
+    "node_modules/@babel/plugin-transform-react-jsx-self": {
+      "version": "7.27.1",
+      "resolved": "https://registry.npmjs.org/@babel/plugin-transform-react-jsx-self/-/plugin-transform-react-jsx-self-7.27.1.tgz",
+      "integrity": "sha512-6UzkCs+ejGdZ5mFFC/OCUrv028ab2fp1znZmCZjAOBKiBK2jXD1O+BPSfX8X2qjJ75fZBMSnQn3Rq2mrBJK2mw==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/helper-plugin-utils": "^7.27.1"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      },
+      "peerDependencies": {
+        "@babel/core": "^7.0.0-0"
+      }
+    },
+    "node_modules/@babel/plugin-transform-react-jsx-source": {
+      "version": "7.27.1",
+      "resolved": "https://registry.npmjs.org/@babel/plugin-transform-react-jsx-source/-/plugin-transform-react-jsx-source-7.27.1.tgz",
+      "integrity": "sha512-zbwoTsBruTeKB9hSq73ha66iFeJHuaFkUbwvqElnygoNbj/jHRsSeokowZFN3CZ64IvEqcmmkVe89OPXc7ldAw==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/helper-plugin-utils": "^7.27.1"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      },
+      "peerDependencies": {
+        "@babel/core": "^7.0.0-0"
+      }
+    },
+    "node_modules/@babel/template": {
+      "version": "7.27.2",
+      "resolved": "https://registry.npmjs.org/@babel/template/-/template-7.27.2.tgz",
+      "integrity": "sha512-LPDZ85aEJyYSd18/DkjNh4/y1ntkE5KwUHWTiqgRxruuZL2F1yuHligVHLvcHY2vMHXttKFpJn6LwfI7cw7ODw==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/code-frame": "^7.27.1",
+        "@babel/parser": "^7.27.2",
+        "@babel/types": "^7.27.1"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/traverse": {
+      "version": "7.28.4",
+      "resolved": "https://registry.npmjs.org/@babel/traverse/-/traverse-7.28.4.tgz",
+      "integrity": "sha512-YEzuboP2qvQavAcjgQNVgsvHIDv6ZpwXvcvjmyySP2DIMuByS/6ioU5G9pYrWHM6T2YDfc7xga9iNzYOs12CFQ==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/code-frame": "^7.27.1",
+        "@babel/generator": "^7.28.3",
+        "@babel/helper-globals": "^7.28.0",
+        "@babel/parser": "^7.28.4",
+        "@babel/template": "^7.27.2",
+        "@babel/types": "^7.28.4",
+        "debug": "^4.3.1"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@babel/types": {
+      "version": "7.28.4",
+      "resolved": "https://registry.npmjs.org/@babel/types/-/types-7.28.4.tgz",
+      "integrity": "sha512-bkFqkLhh3pMBUQQkpVgWDWq/lqzc2678eUyDlTBhRqhCHFguYYGM0Efga7tYk4TogG/3x0EEl66/OQ+WGbWB/Q==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/helper-string-parser": "^7.27.1",
+        "@babel/helper-validator-identifier": "^7.27.1"
+      },
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/@esbuild/aix-ppc64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.21.5.tgz",
+      "integrity": "sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==",
+      "cpu": [
+        "ppc64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "aix"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/android-arm": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.21.5.tgz",
+      "integrity": "sha512-vCPvzSjpPHEi1siZdlvAlsPxXl7WbOVUBBAowWug4rJHb68Ox8KualB+1ocNvT5fjv6wpkX6o/iEpbDrf68zcg==",
+      "cpu": [
+        "arm"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "android"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/android-arm64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.21.5.tgz",
+      "integrity": "sha512-c0uX9VAUBQ7dTDCjq+wdyGLowMdtR/GoC2U5IYk/7D1H1JYC0qseD7+11iMP2mRLN9RcCMRcjC4YMclCzGwS/A==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "android"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/android-x64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.21.5.tgz",
+      "integrity": "sha512-D7aPRUUNHRBwHxzxRvp856rjUHRFW1SdQATKXH2hqA0kAZb1hKmi02OpYRacl0TxIGz/ZmXWlbZgjwWYaCakTA==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "android"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/darwin-arm64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.21.5.tgz",
+      "integrity": "sha512-DwqXqZyuk5AiWWf3UfLiRDJ5EDd49zg6O9wclZ7kUMv2WRFr4HKjXp/5t8JZ11QbQfUS6/cRCKGwYhtNAY88kQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/darwin-x64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.21.5.tgz",
+      "integrity": "sha512-se/JjF8NlmKVG4kNIuyWMV/22ZaerB+qaSi5MdrXtd6R08kvs2qCN4C09miupktDitvh8jRFflwGFBQcxZRjbw==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/freebsd-arm64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.21.5.tgz",
+      "integrity": "sha512-5JcRxxRDUJLX8JXp/wcBCy3pENnCgBR9bN6JsY4OmhfUtIHe3ZW0mawA7+RDAcMLrMIZaf03NlQiX9DGyB8h4g==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/freebsd-x64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.21.5.tgz",
+      "integrity": "sha512-J95kNBj1zkbMXtHVH29bBriQygMXqoVQOQYA+ISs0/2l3T9/kj42ow2mpqerRBxDJnmkUDCaQT/dfNXWX/ZZCQ==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/linux-arm": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.21.5.tgz",
+      "integrity": "sha512-bPb5AHZtbeNGjCKVZ9UGqGwo8EUu4cLq68E95A53KlxAPRmUyYv2D6F0uUI65XisGOL1hBP5mTronbgo+0bFcA==",
+      "cpu": [
+        "arm"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/linux-arm64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.21.5.tgz",
+      "integrity": "sha512-ibKvmyYzKsBeX8d8I7MH/TMfWDXBF3db4qM6sy+7re0YXya+K1cem3on9XgdT2EQGMu4hQyZhan7TeQ8XkGp4Q==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/linux-ia32": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.21.5.tgz",
+      "integrity": "sha512-YvjXDqLRqPDl2dvRODYmmhz4rPeVKYvppfGYKSNGdyZkA01046pLWyRKKI3ax8fbJoK5QbxblURkwK/MWY18Tg==",
+      "cpu": [
+        "ia32"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/linux-loong64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-loong64/-/linux-loong64-0.21.5.tgz",
+      "integrity": "sha512-uHf1BmMG8qEvzdrzAqg2SIG/02+4/DHB6a9Kbya0XDvwDEKCoC8ZRWI5JJvNdUjtciBGFQ5PuBlpEOXQj+JQSg==",
+      "cpu": [
+        "loong64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/linux-mips64el": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-mips64el/-/linux-mips64el-0.21.5.tgz",
+      "integrity": "sha512-IajOmO+KJK23bj52dFSNCMsz1QP1DqM6cwLUv3W1QwyxkyIWecfafnI555fvSGqEKwjMXVLokcV5ygHW5b3Jbg==",
+      "cpu": [
+        "mips64el"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/linux-ppc64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.21.5.tgz",
+      "integrity": "sha512-1hHV/Z4OEfMwpLO8rp7CvlhBDnjsC3CttJXIhBi+5Aj5r+MBvy4egg7wCbe//hSsT+RvDAG7s81tAvpL2XAE4w==",
+      "cpu": [
+        "ppc64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/linux-riscv64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.21.5.tgz",
+      "integrity": "sha512-2HdXDMd9GMgTGrPWnJzP2ALSokE/0O5HhTUvWIbD3YdjME8JwvSCnNGBnTThKGEB91OZhzrJ4qIIxk/SBmyDDA==",
+      "cpu": [
+        "riscv64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/linux-s390x": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.21.5.tgz",
+      "integrity": "sha512-zus5sxzqBJD3eXxwvjN1yQkRepANgxE9lgOW2qLnmr8ikMTphkjgXu1HR01K4FJg8h1kEEDAqDcZQtbrRnB41A==",
+      "cpu": [
+        "s390x"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/linux-x64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.21.5.tgz",
+      "integrity": "sha512-1rYdTpyv03iycF1+BhzrzQJCdOuAOtaqHTWJZCWvijKD2N5Xu0TtVC8/+1faWqcP9iBCWOmjmhoH94dH82BxPQ==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/netbsd-x64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.21.5.tgz",
+      "integrity": "sha512-Woi2MXzXjMULccIwMnLciyZH4nCIMpWQAs049KEeMvOcNADVxo0UBIQPfSmxB3CWKedngg7sWZdLvLczpe0tLg==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "netbsd"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/openbsd-x64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.21.5.tgz",
+      "integrity": "sha512-HLNNw99xsvx12lFBUwoT8EVCsSvRNDVxNpjZ7bPn947b8gJPzeHWyNVhFsaerc0n3TsbOINvRP2byTZ5LKezow==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "openbsd"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/sunos-x64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.21.5.tgz",
+      "integrity": "sha512-6+gjmFpfy0BHU5Tpptkuh8+uw3mnrvgs+dSPQXQOv3ekbordwnzTVEb4qnIvQcYXq6gzkyTnoZ9dZG+D4garKg==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "sunos"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/win32-arm64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.21.5.tgz",
+      "integrity": "sha512-Z0gOTd75VvXqyq7nsl93zwahcTROgqvuAcYDUr+vOv8uHhNSKROyU961kgtCD1e95IqPKSQKH7tBTslnS3tA8A==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/win32-ia32": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.21.5.tgz",
+      "integrity": "sha512-SWXFF1CL2RVNMaVs+BBClwtfZSvDgtL//G/smwAc5oVK/UPu2Gu9tIaRgFmYFFKrmg3SyAjSrElf0TiJ1v8fYA==",
+      "cpu": [
+        "ia32"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@esbuild/win32-x64": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.21.5.tgz",
+      "integrity": "sha512-tQd/1efJuzPC6rCFwEvLtci/xNFcTZknmXs98FYDfGE4wP9ClFV98nyKrzJKVPMhdDnjzLhdUyMX4PsQAPjwIw==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "engines": {
+        "node": ">=12"
+      }
+    },
+    "node_modules/@jridgewell/gen-mapping": {
+      "version": "0.3.13",
+      "resolved": "https://registry.npmjs.org/@jridgewell/gen-mapping/-/gen-mapping-0.3.13.tgz",
+      "integrity": "sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@jridgewell/sourcemap-codec": "^1.5.0",
+        "@jridgewell/trace-mapping": "^0.3.24"
+      }
+    },
+    "node_modules/@jridgewell/remapping": {
+      "version": "2.3.5",
+      "resolved": "https://registry.npmjs.org/@jridgewell/remapping/-/remapping-2.3.5.tgz",
+      "integrity": "sha512-LI9u/+laYG4Ds1TDKSJW2YPrIlcVYOwi2fUC6xB43lueCjgxV4lffOCZCtYFiH6TNOX+tQKXx97T4IKHbhyHEQ==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@jridgewell/gen-mapping": "^0.3.5",
+        "@jridgewell/trace-mapping": "^0.3.24"
+      }
+    },
+    "node_modules/@jridgewell/resolve-uri": {
+      "version": "3.1.2",
+      "resolved": "https://registry.npmjs.org/@jridgewell/resolve-uri/-/resolve-uri-3.1.2.tgz",
+      "integrity": "sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=6.0.0"
+      }
+    },
+    "node_modules/@jridgewell/sourcemap-codec": {
+      "version": "1.5.5",
+      "resolved": "https://registry.npmjs.org/@jridgewell/sourcemap-codec/-/sourcemap-codec-1.5.5.tgz",
+      "integrity": "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==",
+      "dev": true,
+      "license": "MIT"
+    },
+    "node_modules/@jridgewell/trace-mapping": {
+      "version": "0.3.30",
+      "resolved": "https://registry.npmjs.org/@jridgewell/trace-mapping/-/trace-mapping-0.3.30.tgz",
+      "integrity": "sha512-GQ7Nw5G2lTu/BtHTKfXhKHok2WGetd4XYcVKGx00SjAk8GMwgJM3zr6zORiPGuOE+/vkc90KtTosSSvaCjKb2Q==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@jridgewell/resolve-uri": "^3.1.0",
+        "@jridgewell/sourcemap-codec": "^1.4.14"
+      }
+    },
+    "node_modules/@remix-run/router": {
+      "version": "1.23.0",
+      "resolved": "https://registry.npmjs.org/@remix-run/router/-/router-1.23.0.tgz",
+      "integrity": "sha512-O3rHJzAQKamUz1fvE0Qaw0xSFqsA/yafi2iqeE0pvdFtCO1viYx8QL6f3Ln/aCCTLxs68SLf0KPM9eSeM8yBnA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14.0.0"
+      }
+    },
+    "node_modules/@rolldown/pluginutils": {
+      "version": "1.0.0-beta.27",
+      "resolved": "https://registry.npmjs.org/@rolldown/pluginutils/-/pluginutils-1.0.0-beta.27.tgz",
+      "integrity": "sha512-+d0F4MKMCbeVUJwG96uQ4SgAznZNSq93I3V+9NHA4OpvqG8mRCpGdKmK8l/dl02h2CCDHwW2FqilnTyDcAnqjA==",
+      "dev": true,
+      "license": "MIT"
+    },
+    "node_modules/@rollup/rollup-android-arm-eabi": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-android-arm-eabi/-/rollup-android-arm-eabi-4.50.0.tgz",
+      "integrity": "sha512-lVgpeQyy4fWN5QYebtW4buT/4kn4p4IJ+kDNB4uYNT5b8c8DLJDg6titg20NIg7E8RWwdWZORW6vUFfrLyG3KQ==",
+      "cpu": [
+        "arm"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "android"
+      ]
+    },
+    "node_modules/@rollup/rollup-android-arm64": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-android-arm64/-/rollup-android-arm64-4.50.0.tgz",
+      "integrity": "sha512-2O73dR4Dc9bp+wSYhviP6sDziurB5/HCym7xILKifWdE9UsOe2FtNcM+I4xZjKrfLJnq5UR8k9riB87gauiQtw==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "android"
+      ]
+    },
+    "node_modules/@rollup/rollup-darwin-arm64": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-darwin-arm64/-/rollup-darwin-arm64-4.50.0.tgz",
+      "integrity": "sha512-vwSXQN8T4sKf1RHr1F0s98Pf8UPz7pS6P3LG9NSmuw0TVh7EmaE+5Ny7hJOZ0M2yuTctEsHHRTMi2wuHkdS6Hg==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ]
+    },
+    "node_modules/@rollup/rollup-darwin-x64": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-darwin-x64/-/rollup-darwin-x64-4.50.0.tgz",
+      "integrity": "sha512-cQp/WG8HE7BCGyFVuzUg0FNmupxC+EPZEwWu2FCGGw5WDT1o2/YlENbm5e9SMvfDFR6FRhVCBePLqj0o8MN7Vw==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ]
+    },
+    "node_modules/@rollup/rollup-freebsd-arm64": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-freebsd-arm64/-/rollup-freebsd-arm64-4.50.0.tgz",
+      "integrity": "sha512-UR1uTJFU/p801DvvBbtDD7z9mQL8J80xB0bR7DqW7UGQHRm/OaKzp4is7sQSdbt2pjjSS72eAtRh43hNduTnnQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ]
+    },
+    "node_modules/@rollup/rollup-freebsd-x64": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-freebsd-x64/-/rollup-freebsd-x64-4.50.0.tgz",
+      "integrity": "sha512-G/DKyS6PK0dD0+VEzH/6n/hWDNPDZSMBmqsElWnCRGrYOb2jC0VSupp7UAHHQ4+QILwkxSMaYIbQ72dktp8pKA==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-arm-gnueabihf": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm-gnueabihf/-/rollup-linux-arm-gnueabihf-4.50.0.tgz",
+      "integrity": "sha512-u72Mzc6jyJwKjJbZZcIYmd9bumJu7KNmHYdue43vT1rXPm2rITwmPWF0mmPzLm9/vJWxIRbao/jrQmxTO0Sm9w==",
+      "cpu": [
+        "arm"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-arm-musleabihf": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm-musleabihf/-/rollup-linux-arm-musleabihf-4.50.0.tgz",
+      "integrity": "sha512-S4UefYdV0tnynDJV1mdkNawp0E5Qm2MtSs330IyHgaccOFrwqsvgigUD29uT+B/70PDY1eQ3t40+xf6wIvXJyg==",
+      "cpu": [
+        "arm"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-arm64-gnu": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm64-gnu/-/rollup-linux-arm64-gnu-4.50.0.tgz",
+      "integrity": "sha512-1EhkSvUQXJsIhk4msxP5nNAUWoB4MFDHhtc4gAYvnqoHlaL9V3F37pNHabndawsfy/Tp7BPiy/aSa6XBYbaD1g==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-arm64-musl": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm64-musl/-/rollup-linux-arm64-musl-4.50.0.tgz",
+      "integrity": "sha512-EtBDIZuDtVg75xIPIK1l5vCXNNCIRM0OBPUG+tbApDuJAy9mKago6QxX+tfMzbCI6tXEhMuZuN1+CU8iDW+0UQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-loongarch64-gnu": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-loongarch64-gnu/-/rollup-linux-loongarch64-gnu-4.50.0.tgz",
+      "integrity": "sha512-BGYSwJdMP0hT5CCmljuSNx7+k+0upweM2M4YGfFBjnFSZMHOLYR0gEEj/dxyYJ6Zc6AiSeaBY8dWOa11GF/ppQ==",
+      "cpu": [
+        "loong64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-ppc64-gnu": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-ppc64-gnu/-/rollup-linux-ppc64-gnu-4.50.0.tgz",
+      "integrity": "sha512-I1gSMzkVe1KzAxKAroCJL30hA4DqSi+wGc5gviD0y3IL/VkvcnAqwBf4RHXHyvH66YVHxpKO8ojrgc4SrWAnLg==",
+      "cpu": [
+        "ppc64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-riscv64-gnu": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-riscv64-gnu/-/rollup-linux-riscv64-gnu-4.50.0.tgz",
+      "integrity": "sha512-bSbWlY3jZo7molh4tc5dKfeSxkqnf48UsLqYbUhnkdnfgZjgufLS/NTA8PcP/dnvct5CCdNkABJ56CbclMRYCA==",
+      "cpu": [
+        "riscv64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-riscv64-musl": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-riscv64-musl/-/rollup-linux-riscv64-musl-4.50.0.tgz",
+      "integrity": "sha512-LSXSGumSURzEQLT2e4sFqFOv3LWZsEF8FK7AAv9zHZNDdMnUPYH3t8ZlaeYYZyTXnsob3htwTKeWtBIkPV27iQ==",
+      "cpu": [
+        "riscv64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-s390x-gnu": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-s390x-gnu/-/rollup-linux-s390x-gnu-4.50.0.tgz",
+      "integrity": "sha512-CxRKyakfDrsLXiCyucVfVWVoaPA4oFSpPpDwlMcDFQvrv3XY6KEzMtMZrA+e/goC8xxp2WSOxHQubP8fPmmjOQ==",
+      "cpu": [
+        "s390x"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-x64-gnu": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-x64-gnu/-/rollup-linux-x64-gnu-4.50.0.tgz",
+      "integrity": "sha512-8PrJJA7/VU8ToHVEPu14FzuSAqVKyo5gg/J8xUerMbyNkWkO9j2ExBho/68RnJsMGNJq4zH114iAttgm7BZVkA==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-linux-x64-musl": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-x64-musl/-/rollup-linux-x64-musl-4.50.0.tgz",
+      "integrity": "sha512-SkE6YQp+CzpyOrbw7Oc4MgXFvTw2UIBElvAvLCo230pyxOLmYwRPwZ/L5lBe/VW/qT1ZgND9wJfOsdy0XptRvw==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@rollup/rollup-openharmony-arm64": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-openharmony-arm64/-/rollup-openharmony-arm64-4.50.0.tgz",
+      "integrity": "sha512-PZkNLPfvXeIOgJWA804zjSFH7fARBBCpCXxgkGDRjjAhRLOR8o0IGS01ykh5GYfod4c2yiiREuDM8iZ+pVsT+Q==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "openharmony"
+      ]
+    },
+    "node_modules/@rollup/rollup-win32-arm64-msvc": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-arm64-msvc/-/rollup-win32-arm64-msvc-4.50.0.tgz",
+      "integrity": "sha512-q7cIIdFvWQoaCbLDUyUc8YfR3Jh2xx3unO8Dn6/TTogKjfwrax9SyfmGGK6cQhKtjePI7jRfd7iRYcxYs93esg==",
+      "cpu": [
+        "arm64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ]
+    },
+    "node_modules/@rollup/rollup-win32-ia32-msvc": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-ia32-msvc/-/rollup-win32-ia32-msvc-4.50.0.tgz",
+      "integrity": "sha512-XzNOVg/YnDOmFdDKcxxK410PrcbcqZkBmz+0FicpW5jtjKQxcW1BZJEQOF0NJa6JO7CZhett8GEtRN/wYLYJuw==",
+      "cpu": [
+        "ia32"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ]
+    },
+    "node_modules/@rollup/rollup-win32-x64-msvc": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-x64-msvc/-/rollup-win32-x64-msvc-4.50.0.tgz",
+      "integrity": "sha512-xMmiWRR8sp72Zqwjgtf3QbZfF1wdh8X2ABu3EaozvZcyHJeU0r+XAnXdKgs4cCAp6ORoYoCygipYP1mjmbjrsg==",
+      "cpu": [
+        "x64"
+      ],
+      "dev": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ]
+    },
+    "node_modules/@types/babel__core": {
+      "version": "7.20.5",
+      "resolved": "https://registry.npmjs.org/@types/babel__core/-/babel__core-7.20.5.tgz",
+      "integrity": "sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/parser": "^7.20.7",
+        "@babel/types": "^7.20.7",
+        "@types/babel__generator": "*",
+        "@types/babel__template": "*",
+        "@types/babel__traverse": "*"
+      }
+    },
+    "node_modules/@types/babel__generator": {
+      "version": "7.27.0",
+      "resolved": "https://registry.npmjs.org/@types/babel__generator/-/babel__generator-7.27.0.tgz",
+      "integrity": "sha512-ufFd2Xi92OAVPYsy+P4n7/U7e68fex0+Ee8gSG9KX7eo084CWiQ4sdxktvdl0bOPupXtVJPY19zk6EwWqUQ8lg==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/types": "^7.0.0"
+      }
+    },
+    "node_modules/@types/babel__template": {
+      "version": "7.4.4",
+      "resolved": "https://registry.npmjs.org/@types/babel__template/-/babel__template-7.4.4.tgz",
+      "integrity": "sha512-h/NUaSyG5EyxBIp8YRxo4RMe2/qQgvyowRwVMzhYhBCONbW8PUsg4lkFMrhgZhUe5z3L3MiLDuvyJ/CaPa2A8A==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/parser": "^7.1.0",
+        "@babel/types": "^7.0.0"
+      }
+    },
+    "node_modules/@types/babel__traverse": {
+      "version": "7.28.0",
+      "resolved": "https://registry.npmjs.org/@types/babel__traverse/-/babel__traverse-7.28.0.tgz",
+      "integrity": "sha512-8PvcXf70gTDZBgt9ptxJ8elBeBjcLOAcOtoO/mPJjtji1+CdGbHgm77om1GrsPxsiE+uXIpNSK64UYaIwQXd4Q==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/types": "^7.28.2"
+      }
+    },
+    "node_modules/@types/estree": {
+      "version": "1.0.8",
+      "resolved": "https://registry.npmjs.org/@types/estree/-/estree-1.0.8.tgz",
+      "integrity": "sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==",
+      "dev": true,
+      "license": "MIT"
+    },
+    "node_modules/@types/prop-types": {
+      "version": "15.7.15",
+      "resolved": "https://registry.npmjs.org/@types/prop-types/-/prop-types-15.7.15.tgz",
+      "integrity": "sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw==",
+      "dev": true,
+      "license": "MIT"
+    },
+    "node_modules/@types/react": {
+      "version": "18.3.24",
+      "resolved": "https://registry.npmjs.org/@types/react/-/react-18.3.24.tgz",
+      "integrity": "sha512-0dLEBsA1kI3OezMBF8nSsb7Nk19ZnsyE1LLhB8r27KbgU5H4pvuqZLdtE+aUkJVoXgTVuA+iLIwmZ0TuK4tx6A==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@types/prop-types": "*",
+        "csstype": "^3.0.2"
+      }
+    },
+    "node_modules/@types/react-dom": {
+      "version": "18.3.7",
+      "resolved": "https://registry.npmjs.org/@types/react-dom/-/react-dom-18.3.7.tgz",
+      "integrity": "sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ==",
+      "dev": true,
+      "license": "MIT",
+      "peerDependencies": {
+        "@types/react": "^18.0.0"
+      }
+    },
+    "node_modules/@vitejs/plugin-react": {
+      "version": "4.7.0",
+      "resolved": "https://registry.npmjs.org/@vitejs/plugin-react/-/plugin-react-4.7.0.tgz",
+      "integrity": "sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@babel/core": "^7.28.0",
+        "@babel/plugin-transform-react-jsx-self": "^7.27.1",
+        "@babel/plugin-transform-react-jsx-source": "^7.27.1",
+        "@rolldown/pluginutils": "1.0.0-beta.27",
+        "@types/babel__core": "^7.20.5",
+        "react-refresh": "^0.17.0"
+      },
+      "engines": {
+        "node": "^14.18.0 || >=16.0.0"
+      },
+      "peerDependencies": {
+        "vite": "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0"
+      }
+    },
+    "node_modules/browserslist": {
+      "version": "4.25.4",
+      "resolved": "https://registry.npmjs.org/browserslist/-/browserslist-4.25.4.tgz",
+      "integrity": "sha512-4jYpcjabC606xJ3kw2QwGEZKX0Aw7sgQdZCvIK9dhVSPh76BKo+C+btT1RRofH7B+8iNpEbgGNVWiLki5q93yg==",
+      "dev": true,
+      "funding": [
+        {
+          "type": "opencollective",
+          "url": "https://opencollective.com/browserslist"
+        },
+        {
+          "type": "tidelift",
+          "url": "https://tidelift.com/funding/github/npm/browserslist"
+        },
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/ai"
+        }
+      ],
+      "license": "MIT",
+      "dependencies": {
+        "caniuse-lite": "^1.0.30001737",
+        "electron-to-chromium": "^1.5.211",
+        "node-releases": "^2.0.19",
+        "update-browserslist-db": "^1.1.3"
+      },
+      "bin": {
+        "browserslist": "cli.js"
+      },
+      "engines": {
+        "node": "^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7"
+      }
+    },
+    "node_modules/caniuse-lite": {
+      "version": "1.0.30001741",
+      "resolved": "https://registry.npmjs.org/caniuse-lite/-/caniuse-lite-1.0.30001741.tgz",
+      "integrity": "sha512-QGUGitqsc8ARjLdgAfxETDhRbJ0REsP6O3I96TAth/mVjh2cYzN2u+3AzPP3aVSm2FehEItaJw1xd+IGBXWeSw==",
+      "dev": true,
+      "funding": [
+        {
+          "type": "opencollective",
+          "url": "https://opencollective.com/browserslist"
+        },
+        {
+          "type": "tidelift",
+          "url": "https://tidelift.com/funding/github/npm/caniuse-lite"
+        },
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/ai"
+        }
+      ],
+      "license": "CC-BY-4.0"
+    },
+    "node_modules/convert-source-map": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/convert-source-map/-/convert-source-map-2.0.0.tgz",
+      "integrity": "sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==",
+      "dev": true,
+      "license": "MIT"
+    },
+    "node_modules/csstype": {
+      "version": "3.1.3",
+      "resolved": "https://registry.npmjs.org/csstype/-/csstype-3.1.3.tgz",
+      "integrity": "sha512-M1uQkMl8rQK/szD0LNhtqxIPLpimGm8sOBwU7lLnCpSbTyY3yeU1Vc7l4KT5zT4s/yOxHH5O7tIuuLOCnLADRw==",
+      "dev": true,
+      "license": "MIT"
+    },
+    "node_modules/debug": {
+      "version": "4.4.1",
+      "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.1.tgz",
+      "integrity": "sha512-KcKCqiftBJcZr++7ykoDIEwSa3XWowTfNPo92BYxjXiyYEVrUQh2aLyhxBCwww+heortUFxEJYcRzosstTEBYQ==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "ms": "^2.1.3"
+      },
+      "engines": {
+        "node": ">=6.0"
+      },
+      "peerDependenciesMeta": {
+        "supports-color": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/electron-to-chromium": {
+      "version": "1.5.214",
+      "resolved": "https://registry.npmjs.org/electron-to-chromium/-/electron-to-chromium-1.5.214.tgz",
+      "integrity": "sha512-TpvUNdha+X3ybfU78NoQatKvQEm1oq3lf2QbnmCEdw+Bd9RuIAY+hJTvq1avzHM0f7EJfnH3vbCnbzKzisc/9Q==",
+      "dev": true,
+      "license": "ISC"
+    },
+    "node_modules/esbuild": {
+      "version": "0.21.5",
+      "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.21.5.tgz",
+      "integrity": "sha512-mg3OPMV4hXywwpoDxu3Qda5xCKQi+vCTZq8S9J/EpkhB2HzKXq4SNFZE3+NK93JYxc8VMSep+lOUSC/RVKaBqw==",
+      "dev": true,
+      "hasInstallScript": true,
+      "license": "MIT",
+      "bin": {
+        "esbuild": "bin/esbuild"
+      },
+      "engines": {
+        "node": ">=12"
+      },
+      "optionalDependencies": {
+        "@esbuild/aix-ppc64": "0.21.5",
+        "@esbuild/android-arm": "0.21.5",
+        "@esbuild/android-arm64": "0.21.5",
+        "@esbuild/android-x64": "0.21.5",
+        "@esbuild/darwin-arm64": "0.21.5",
+        "@esbuild/darwin-x64": "0.21.5",
+        "@esbuild/freebsd-arm64": "0.21.5",
+        "@esbuild/freebsd-x64": "0.21.5",
+        "@esbuild/linux-arm": "0.21.5",
+        "@esbuild/linux-arm64": "0.21.5",
+        "@esbuild/linux-ia32": "0.21.5",
+        "@esbuild/linux-loong64": "0.21.5",
+        "@esbuild/linux-mips64el": "0.21.5",
+        "@esbuild/linux-ppc64": "0.21.5",
+        "@esbuild/linux-riscv64": "0.21.5",
+        "@esbuild/linux-s390x": "0.21.5",
+        "@esbuild/linux-x64": "0.21.5",
+        "@esbuild/netbsd-x64": "0.21.5",
+        "@esbuild/openbsd-x64": "0.21.5",
+        "@esbuild/sunos-x64": "0.21.5",
+        "@esbuild/win32-arm64": "0.21.5",
+        "@esbuild/win32-ia32": "0.21.5",
+        "@esbuild/win32-x64": "0.21.5"
+      }
+    },
+    "node_modules/escalade": {
+      "version": "3.2.0",
+      "resolved": "https://registry.npmjs.org/escalade/-/escalade-3.2.0.tgz",
+      "integrity": "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=6"
+      }
+    },
+    "node_modules/fsevents": {
+      "version": "2.3.3",
+      "resolved": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz",
+      "integrity": "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==",
+      "dev": true,
+      "hasInstallScript": true,
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "engines": {
+        "node": "^8.16.0 || ^10.6.0 || >=11.0.0"
+      }
+    },
+    "node_modules/gensync": {
+      "version": "1.0.0-beta.2",
+      "resolved": "https://registry.npmjs.org/gensync/-/gensync-1.0.0-beta.2.tgz",
+      "integrity": "sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=6.9.0"
+      }
+    },
+    "node_modules/js-tokens": {
+      "version": "4.0.0",
+      "resolved": "https://registry.npmjs.org/js-tokens/-/js-tokens-4.0.0.tgz",
+      "integrity": "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==",
+      "license": "MIT"
+    },
+    "node_modules/jsesc": {
+      "version": "3.1.0",
+      "resolved": "https://registry.npmjs.org/jsesc/-/jsesc-3.1.0.tgz",
+      "integrity": "sha512-/sM3dO2FOzXjKQhJuo0Q173wf2KOo8t4I8vHy6lF9poUp7bKT0/NHE8fPX23PwfhnykfqnC2xRxOnVw5XuGIaA==",
+      "dev": true,
+      "license": "MIT",
+      "bin": {
+        "jsesc": "bin/jsesc"
+      },
+      "engines": {
+        "node": ">=6"
+      }
+    },
+    "node_modules/json5": {
+      "version": "2.2.3",
+      "resolved": "https://registry.npmjs.org/json5/-/json5-2.2.3.tgz",
+      "integrity": "sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==",
+      "dev": true,
+      "license": "MIT",
+      "bin": {
+        "json5": "lib/cli.js"
+      },
+      "engines": {
+        "node": ">=6"
+      }
+    },
+    "node_modules/loose-envify": {
+      "version": "1.4.0",
+      "resolved": "https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0.tgz",
+      "integrity": "sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==",
+      "license": "MIT",
+      "dependencies": {
+        "js-tokens": "^3.0.0 || ^4.0.0"
+      },
+      "bin": {
+        "loose-envify": "cli.js"
+      }
+    },
+    "node_modules/lru-cache": {
+      "version": "5.1.1",
+      "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-5.1.1.tgz",
+      "integrity": "sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==",
+      "dev": true,
+      "license": "ISC",
+      "dependencies": {
+        "yallist": "^3.0.2"
+      }
+    },
+    "node_modules/ms": {
+      "version": "2.1.3",
+      "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+      "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+      "dev": true,
+      "license": "MIT"
+    },
+    "node_modules/nanoid": {
+      "version": "3.3.11",
+      "resolved": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.11.tgz",
+      "integrity": "sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==",
+      "dev": true,
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/ai"
+        }
+      ],
+      "license": "MIT",
+      "bin": {
+        "nanoid": "bin/nanoid.cjs"
+      },
+      "engines": {
+        "node": "^10 || ^12 || ^13.7 || ^14 || >=15.0.1"
+      }
+    },
+    "node_modules/node-releases": {
+      "version": "2.0.20",
+      "resolved": "https://registry.npmjs.org/node-releases/-/node-releases-2.0.20.tgz",
+      "integrity": "sha512-7gK6zSXEH6neM212JgfYFXe+GmZQM+fia5SsusuBIUgnPheLFBmIPhtFoAQRj8/7wASYQnbDlHPVwY0BefoFgA==",
+      "dev": true,
+      "license": "MIT"
+    },
+    "node_modules/picocolors": {
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/picocolors/-/picocolors-1.1.1.tgz",
+      "integrity": "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==",
+      "dev": true,
+      "license": "ISC"
+    },
+    "node_modules/postcss": {
+      "version": "8.5.6",
+      "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.6.tgz",
+      "integrity": "sha512-3Ybi1tAuwAP9s0r1UQ2J4n5Y0G05bJkpUIO0/bI9MhwmD70S5aTWbXGBwxHrelT+XM1k6dM0pk+SwNkpTRN7Pg==",
+      "dev": true,
+      "funding": [
+        {
+          "type": "opencollective",
+          "url": "https://opencollective.com/postcss/"
+        },
+        {
+          "type": "tidelift",
+          "url": "https://tidelift.com/funding/github/npm/postcss"
+        },
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/ai"
+        }
+      ],
+      "license": "MIT",
+      "dependencies": {
+        "nanoid": "^3.3.11",
+        "picocolors": "^1.1.1",
+        "source-map-js": "^1.2.1"
+      },
+      "engines": {
+        "node": "^10 || ^12 || >=14"
+      }
+    },
+    "node_modules/react": {
+      "version": "18.3.1",
+      "resolved": "https://registry.npmjs.org/react/-/react-18.3.1.tgz",
+      "integrity": "sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ==",
+      "license": "MIT",
+      "dependencies": {
+        "loose-envify": "^1.1.0"
+      },
+      "engines": {
+        "node": ">=0.10.0"
+      }
+    },
+    "node_modules/react-dom": {
+      "version": "18.3.1",
+      "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-18.3.1.tgz",
+      "integrity": "sha512-5m4nQKp+rZRb09LNH59GM4BxTh9251/ylbKIbpe7TpGxfJ+9kv6BLkLBXIjjspbgbnIBNqlI23tRnTWT0snUIw==",
+      "license": "MIT",
+      "dependencies": {
+        "loose-envify": "^1.1.0",
+        "scheduler": "^0.23.2"
+      },
+      "peerDependencies": {
+        "react": "^18.3.1"
+      }
+    },
+    "node_modules/react-refresh": {
+      "version": "0.17.0",
+      "resolved": "https://registry.npmjs.org/react-refresh/-/react-refresh-0.17.0.tgz",
+      "integrity": "sha512-z6F7K9bV85EfseRCp2bzrpyQ0Gkw1uLoCel9XBVWPg/TjRj94SkJzUTGfOa4bs7iJvBWtQG0Wq7wnI0syw3EBQ==",
+      "dev": true,
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.10.0"
+      }
+    },
+    "node_modules/react-router": {
+      "version": "6.30.1",
+      "resolved": "https://registry.npmjs.org/react-router/-/react-router-6.30.1.tgz",
+      "integrity": "sha512-X1m21aEmxGXqENEPG3T6u0Th7g0aS4ZmoNynhbs+Cn+q+QGTLt+d5IQ2bHAXKzKcxGJjxACpVbnYQSCRcfxHlQ==",
+      "license": "MIT",
+      "dependencies": {
+        "@remix-run/router": "1.23.0"
+      },
+      "engines": {
+        "node": ">=14.0.0"
+      },
+      "peerDependencies": {
+        "react": ">=16.8"
+      }
+    },
+    "node_modules/react-router-dom": {
+      "version": "6.30.1",
+      "resolved": "https://registry.npmjs.org/react-router-dom/-/react-router-dom-6.30.1.tgz",
+      "integrity": "sha512-llKsgOkZdbPU1Eg3zK8lCn+sjD9wMRZZPuzmdWWX5SUs8OFkN5HnFVC0u5KMeMaC9aoancFI/KoLuKPqN+hxHw==",
+      "license": "MIT",
+      "dependencies": {
+        "@remix-run/router": "1.23.0",
+        "react-router": "6.30.1"
+      },
+      "engines": {
+        "node": ">=14.0.0"
+      },
+      "peerDependencies": {
+        "react": ">=16.8",
+        "react-dom": ">=16.8"
+      }
+    },
+    "node_modules/rollup": {
+      "version": "4.50.0",
+      "resolved": "https://registry.npmjs.org/rollup/-/rollup-4.50.0.tgz",
+      "integrity": "sha512-/Zl4D8zPifNmyGzJS+3kVoyXeDeT/GrsJM94sACNg9RtUE0hrHa1bNPtRSrfHTMH5HjRzce6K7rlTh3Khiw+pw==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "@types/estree": "1.0.8"
+      },
+      "bin": {
+        "rollup": "dist/bin/rollup"
+      },
+      "engines": {
+        "node": ">=18.0.0",
+        "npm": ">=8.0.0"
+      },
+      "optionalDependencies": {
+        "@rollup/rollup-android-arm-eabi": "4.50.0",
+        "@rollup/rollup-android-arm64": "4.50.0",
+        "@rollup/rollup-darwin-arm64": "4.50.0",
+        "@rollup/rollup-darwin-x64": "4.50.0",
+        "@rollup/rollup-freebsd-arm64": "4.50.0",
+        "@rollup/rollup-freebsd-x64": "4.50.0",
+        "@rollup/rollup-linux-arm-gnueabihf": "4.50.0",
+        "@rollup/rollup-linux-arm-musleabihf": "4.50.0",
+        "@rollup/rollup-linux-arm64-gnu": "4.50.0",
+        "@rollup/rollup-linux-arm64-musl": "4.50.0",
+        "@rollup/rollup-linux-loongarch64-gnu": "4.50.0",
+        "@rollup/rollup-linux-ppc64-gnu": "4.50.0",
+        "@rollup/rollup-linux-riscv64-gnu": "4.50.0",
+        "@rollup/rollup-linux-riscv64-musl": "4.50.0",
+        "@rollup/rollup-linux-s390x-gnu": "4.50.0",
+        "@rollup/rollup-linux-x64-gnu": "4.50.0",
+        "@rollup/rollup-linux-x64-musl": "4.50.0",
+        "@rollup/rollup-openharmony-arm64": "4.50.0",
+        "@rollup/rollup-win32-arm64-msvc": "4.50.0",
+        "@rollup/rollup-win32-ia32-msvc": "4.50.0",
+        "@rollup/rollup-win32-x64-msvc": "4.50.0",
+        "fsevents": "~2.3.2"
+      }
+    },
+    "node_modules/scheduler": {
+      "version": "0.23.2",
+      "resolved": "https://registry.npmjs.org/scheduler/-/scheduler-0.23.2.tgz",
+      "integrity": "sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ==",
+      "license": "MIT",
+      "dependencies": {
+        "loose-envify": "^1.1.0"
+      }
+    },
+    "node_modules/semver": {
+      "version": "6.3.1",
+      "resolved": "https://registry.npmjs.org/semver/-/semver-6.3.1.tgz",
+      "integrity": "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA==",
+      "dev": true,
+      "license": "ISC",
+      "bin": {
+        "semver": "bin/semver.js"
+      }
+    },
+    "node_modules/source-map-js": {
+      "version": "1.2.1",
+      "resolved": "https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.1.tgz",
+      "integrity": "sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==",
+      "dev": true,
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=0.10.0"
+      }
+    },
+    "node_modules/typescript": {
+      "version": "5.9.2",
+      "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.2.tgz",
+      "integrity": "sha512-CWBzXQrc/qOkhidw1OzBTQuYRbfyxDXJMVJ1XNwUHGROVmuaeiEm3OslpZ1RV96d7SKKjZKrSJu3+t/xlw3R9A==",
+      "dev": true,
+      "license": "Apache-2.0",
+      "bin": {
+        "tsc": "bin/tsc",
+        "tsserver": "bin/tsserver"
+      },
+      "engines": {
+        "node": ">=14.17"
+      }
+    },
+    "node_modules/update-browserslist-db": {
+      "version": "1.1.3",
+      "resolved": "https://registry.npmjs.org/update-browserslist-db/-/update-browserslist-db-1.1.3.tgz",
+      "integrity": "sha512-UxhIZQ+QInVdunkDAaiazvvT/+fXL5Osr0JZlJulepYu6Jd7qJtDZjlur0emRlT71EN3ScPoE7gvsuIKKNavKw==",
+      "dev": true,
+      "funding": [
+        {
+          "type": "opencollective",
+          "url": "https://opencollective.com/browserslist"
+        },
+        {
+          "type": "tidelift",
+          "url": "https://tidelift.com/funding/github/npm/browserslist"
+        },
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/ai"
+        }
+      ],
+      "license": "MIT",
+      "dependencies": {
+        "escalade": "^3.2.0",
+        "picocolors": "^1.1.1"
+      },
+      "bin": {
+        "update-browserslist-db": "cli.js"
+      },
+      "peerDependencies": {
+        "browserslist": ">= 4.21.0"
+      }
+    },
+    "node_modules/vite": {
+      "version": "5.4.19",
+      "resolved": "https://registry.npmjs.org/vite/-/vite-5.4.19.tgz",
+      "integrity": "sha512-qO3aKv3HoQC8QKiNSTuUM1l9o/XX3+c+VTgLHbJWHZGeTPVAg2XwazI9UWzoxjIJCGCV2zU60uqMzjeLZuULqA==",
+      "dev": true,
+      "license": "MIT",
+      "dependencies": {
+        "esbuild": "^0.21.3",
+        "postcss": "^8.4.43",
+        "rollup": "^4.20.0"
+      },
+      "bin": {
+        "vite": "bin/vite.js"
+      },
+      "engines": {
+        "node": "^18.0.0 || >=20.0.0"
+      },
+      "funding": {
+        "url": "https://github.com/vitejs/vite?sponsor=1"
+      },
+      "optionalDependencies": {
+        "fsevents": "~2.3.3"
+      },
+      "peerDependencies": {
+        "@types/node": "^18.0.0 || >=20.0.0",
+        "less": "*",
+        "lightningcss": "^1.21.0",
+        "sass": "*",
+        "sass-embedded": "*",
+        "stylus": "*",
+        "sugarss": "*",
+        "terser": "^5.4.0"
+      },
+      "peerDependenciesMeta": {
+        "@types/node": {
+          "optional": true
+        },
+        "less": {
+          "optional": true
+        },
+        "lightningcss": {
+          "optional": true
+        },
+        "sass": {
+          "optional": true
+        },
+        "sass-embedded": {
+          "optional": true
+        },
+        "stylus": {
+          "optional": true
+        },
+        "sugarss": {
+          "optional": true
+        },
+        "terser": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/yallist": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/yallist/-/yallist-3.1.1.tgz",
+      "integrity": "sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==",
+      "dev": true,
+      "license": "ISC"
+    }
+  }
+}
+
+
+---
+web\package.json
+
+{
+  "name": "erp-mvp-web",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.8",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.1"
+  }
+}
+
+
+---
+web\tsconfig.json
+
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true
+  },
+  "include": ["src"]
+}
+
+
+---
+web\vite.config.ts
+
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: "0.0.0.0",
+    port: 5173,
+    proxy: {
+      // La API expone /api/* y /health
+      "/api": {
+        target: "http://api:8000",
+        changeOrigin: true,
+      },
+      "/health": {
+        target: "http://api:8000",
+        changeOrigin: true,
+      },
+    },
+  },
+});
+
+
+---
+web\src\api.ts
+
+// src/api.ts
+export interface Role { id: number; nombre: string; }
+export interface User {
+  id: number; email: string; nombre: string; apellido: string;
+  roles: Role[]; activo: boolean;
+}
+export interface Tokens { access_token: string; refresh_token?: string; token_type?: string; expires_in?: number; }
+export interface Project {
+  id: number; uuid: string; codigo: string | null; nombre: string;
+  estado: string; prioridad: number; avance_pct: number; presupuesto_monto: number;
+}
+export interface HealthResponse { status: string; db: string; version: string; }
+
+const API_BASE =
+  (import.meta as any).env?.VITE_API_URL ||
+  window.location.origin.replace(':5173', ':8000');
+
+const AT_KEY = 'erp.at';
+const RT_KEY = 'erp.rt';
+
+export const tokenStore = {
+  get access() { return localStorage.getItem(AT_KEY) || ''; },
+  set access(v: string) { localStorage.setItem(AT_KEY, v); },
+  get refresh() { return localStorage.getItem(RT_KEY) || ''; },
+  set refresh(v: string) { localStorage.setItem(RT_KEY, v); },
+  clear() { localStorage.removeItem(AT_KEY); localStorage.removeItem(RT_KEY); }
+};
+
+async function refreshAccessToken(): Promise<string | null> {
+  const rt = tokenStore.refresh;
+  if (!rt) return null;
+  const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: rt })
+  });
+  if (!res.ok) return null;
+  const data = await res.json() as Tokens;
+  if (data.access_token) {
+    tokenStore.access = data.access_token;
+    return data.access_token;
+  }
+  return null;
+}
+
+async function request<T>(path: string, init?: RequestInit, retry = true): Promise<T> {
+  const headers = new Headers(init?.headers || {});
+  if (!headers.has('Content-Type') && init?.body) headers.set('Content-Type', 'application/json');
+  const at = tokenStore.access;
+  if (at) headers.set('Authorization', `Bearer ${at}`);
+
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (res.status === 401 && retry) {
+    const newAT = await refreshAccessToken();
+    if (newAT) {
+      const headers2 = new Headers(init?.headers || {});
+      if (!headers2.has('Content-Type') && init?.body) headers2.set('Content-Type', 'application/json');
+      headers2.set('Authorization', `Bearer ${newAT}`);
+      const res2 = await fetch(`${API_BASE}${path}`, { ...init, headers: headers2 });
+      if (!res2.ok) throw new Error(`${res2.status} ${res2.statusText}`);
+      return res2.json() as Promise<T>;
+    }
+  }
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json() as Promise<T>;
+}
+
+export const api = {
+  async login(email: string, password: string): Promise<User> {
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    if (!res.ok) throw new Error('Credenciales inválidas');
+    const data = await res.json() as Tokens & User; // login retorna tokens + (a veces user). Cubrimos tokens seguro.
+    if (data.access_token) tokenStore.access = data.access_token;
+    if (data.refresh_token) tokenStore.refresh = data.refresh_token;
+    // Aseguramos el user llamando a /me:
+    return this.me();
+  },
+  me(): Promise<User> {
+    return request<User>('/api/auth/me');
+  },
+  health(): Promise<HealthResponse> {
+    return request<HealthResponse>('/health', { method: 'GET' });
+  },
+  projects: {
+    list(): Promise<Project[]> {
+      return request<Project[]>('/api/projects', { method: 'GET' });
+    },
+    create(payload: { nombre: string; descripcion?: string }): Promise<Project> {
+      return request<Project>('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+    }
+  }
+};
+
+
+---
+web\src\App.tsx
+
+import React from "react";
+import { Link, NavLink, Outlet, Route, Routes } from "react-router-dom";
+import Home from "./pages/Home";
+import Login from "./pages/Login";
+import Projects from "./pages/Projects";
+import ProtectedRoute from "./components/ProtectedRoute";
+import { useAuth } from "./auth/AuthContext";
+
+function Shell() {
+  const { user, logout } = useAuth();
+  return (
+    <div style={{ fontFamily: "system-ui, sans-serif" }}>
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: "1px solid #eee" }}>
+        <Link to="/" style={{ fontWeight: 700, textDecoration: "none", color: "#111827" }}>ERP MVP</Link>
+        <nav style={{ display: "flex", gap: 12 }}>
+          <NavLink to="/" style={({ isActive }) => ({ color: isActive ? "#111827" : "#6b7280", textDecoration: "none" })}>Home</NavLink>
+          <NavLink to="/projects" style={({ isActive }) => ({ color: isActive ? "#111827" : "#6b7280", textDecoration: "none" })}>Proyectos</NavLink>
+        </nav>
+        <div>
+          {user ? (
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ fontSize: 14, color: "#374151" }}>{user.nombre} {user.apellido}</span>
+              <button onClick={logout} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ddd", background: "white", cursor: "pointer" }}>
+                Salir
+              </button>
+            </div>
+          ) : (
+            <NavLink to="/login" style={{ textDecoration: "none", color: "#111827" }}>Iniciar sesión</NavLink>
+          )}
+        </div>
+      </header>
+      <Outlet />
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route element={<Shell />}>
+        <Route index element={<Home />} />
+        <Route path="/login" element={<Login />} />
+        <Route
+          path="/projects"
+          element={
+            <ProtectedRoute>
+              <Projects />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<div style={{ padding: 24 }}>404</div>} />
+      </Route>
+    </Routes>
+  );
+}
+
+
+---
+web\src\authHelpers.ts
+
+// src/auth.ts
+import { api, tokenStore, User } from './api';
+
+export type AuthState = {
+  user: User | null;
+  loading: boolean;
+};
+
+export async function doLogin(email: string, password: string): Promise<User> {
+  const user = await api.login(email, password);
+  return user;
+}
+
+export function doLogout() {
+  tokenStore.clear();
+  // Nada más: el AuthContext se encargará de limpiar el user en memoria
+}
+
+export function hasRole(user: User | null, roleName: string): boolean {
+  if (!user) return false;
+  return (user.roles || []).some(r => r.nombre === roleName);
+}
+
+
+---
+web\src\main.tsx
+
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import App from "./App";
+import { AuthProvider } from "./auth/AuthContext";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </BrowserRouter>
+  </React.StrictMode>
+);
+
+
+---
+web\src\types.ts
+
+export type Project = {
+  id: number;
+  uuid: string;
+  codigo: string | null;
+  nombre: string;
+  estado: string;
+  prioridad: number;
+  avance_pct: number;
+  presupuesto_monto: number;
+};
+
+export type Task = {
+  id: number;
+  proyecto_id: number;
+  titulo: string;
+  descripcion?: string | null;
+  estado: "PENDIENTE" | "EN_PROGRESO" | "BLOQUEADA" | "HECHA";
+  prioridad: number;
+};
+
+export type ResumenEstadoItem = {
+  proyecto_id: number;
+  proyecto: string;
+  estado: string;
+  cantidad: number;
+};
+
+
+---
+web\src\api\auth.ts
+
+import { apiFetch } from "./client";
+
+export type Role = { id: number; nombre: string; activo: boolean };
+export type User = {
+  id: number; email: string; nombre: string; apellido: string;
+  roles: Role[];
+};
+
+export async function login(email: string, password: string) {
+  return apiFetch("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  }) as Promise<{ access_token: string; refresh_token: string; user: User }>;
+}
+
+export async function me() {
+  return apiFetch("/api/auth/me") as Promise<User>;
+}
+
+
+---
+web\src\api\client.ts
+
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+function getToken() {
+  return localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
+}
+
+export async function apiFetch(path: string, init: RequestInit = {}) {
+  const token = getToken();
+  const headers = new Headers(init.headers || {});
+  headers.set("Content-Type", "application/json");
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "");
+    throw new Error(msg || `HTTP ${res.status}`);
+  }
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("application/json") ? res.json() : res.text();
+}
+
+export { API_BASE };
+
+
+---
+web\src\api\projects.ts
+
+// web/src/api/projects.ts
+import { apiFetch } from "./client";
+
+export type Project = {
+  id: number;
+  uuid: string;
+  codigo: string | null;
+  nombre: string;
+  estado: string;
+  prioridad: number;
+  avance_pct: number;
+  presupuesto_monto: number;
+};
+
+export type Task = {
+  id: number;
+  proyecto_id: number;
+  titulo: string;
+  descripcion?: string | null;
+  estado: "PENDIENTE" | "EN_PROGRESO" | "BLOQUEADA" | "HECHA";
+  prioridad: number;
+};
+
+export async function getProjects(): Promise<Project[]> {
+  return apiFetch<Project[]>("/api/projects");
+}
+
+export async function getProjectTasks(projectId: number): Promise<Task[]> {
+  return apiFetch<Task[]>(`/api/projects/${projectId}/tasks`);
+}
+
+export async function createTask(input: {
+  proyecto_id: number;
+  titulo: string;
+  descripcion?: string;
+  prioridad?: number;
+}): Promise<Task> {
+  return apiFetch<Task>("/api/projects/tasks", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateTask(
+  taskId: number,
+  patch: Partial<Pick<Task, "titulo" | "descripcion" | "prioridad" | "estado">>
+): Promise<Task> {
+  return apiFetch<Task>(`/api/projects/tasks/${taskId}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+
+---
+web\src\auth\AuthContext.tsx
+
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { apiFetch, apiSetAccessToken } from "../lib/api";
+
+type Rol = { id: number; nombre: string; descripcion?: string; activo: boolean; created_at: string };
+type Depto = { id: number; nombre: string; descripcion?: string };
+
+export type User = {
+  id: number;
+  uuid: string;
+  email: string;
+  nombre: string;
+  apellido: string;
+  nombre_completo: string;
+  telefono?: string | null;
+  activo: boolean;
+  ultimo_login?: string | null;
+  created_at: string;
+  roles: Rol[];
+  departamentos: Depto[];
+};
+
+type LoginResponse = {
+  access_token: string;
+  refresh_token: string;
+  token_type: "bearer";
+  expires_in: number;
+  user: User;
+};
+
+type AuthContextValue = {
+  user: User | null;
+  accessToken: string | null;
+  refreshToken: string | null;
+  isAuthenticated: boolean;
+  loading: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+};
+
+const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+const ACCESS_KEY = "access_token";
+const REFRESH_KEY = "refresh_token";
+const USER_KEY = "auth_user";
+
+export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Cargar desde localStorage y validar con /api/auth/me
+  useEffect(() => {
+    const at = localStorage.getItem(ACCESS_KEY);
+    const rt = localStorage.getItem(REFRESH_KEY);
+    const uRaw = localStorage.getItem(USER_KEY);
+    if (at) apiSetAccessToken(at);
+    if (at && uRaw) {
+      setAccessToken(at);
+      setRefreshToken(rt);
+      try {
+        const u = JSON.parse(uRaw) as User;
+        setUser(u);
+      } catch {}
+    }
+    (async () => {
+      try {
+        if (at) {
+          const me = await apiFetch("/api/auth/me");
+          setUser(me as User);
+        } else {
+          setUser(null);
+        }
+      } catch {
+        // si falla, limpiamos
+        doLogout();
+      } finally {
+        setLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const doLogout = () => {
+    localStorage.removeItem(ACCESS_KEY);
+    localStorage.removeItem(REFRESH_KEY);
+    localStorage.removeItem(USER_KEY);
+    apiSetAccessToken(null);
+    setUser(null);
+    setAccessToken(null);
+    setRefreshToken(null);
+  };
+
+  const login = async (email: string, password: string) => {
+    const res = await fetch(import.meta.env.VITE_API_URL + "/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.detail || "No se pudo iniciar sesión");
+    }
+    const data = (await res.json()) as LoginResponse;
+    localStorage.setItem(ACCESS_KEY, data.access_token);
+    localStorage.setItem(REFRESH_KEY, data.refresh_token);
+    localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+    apiSetAccessToken(data.access_token);
+    setAccessToken(data.access_token);
+    setRefreshToken(data.refresh_token);
+    setUser(data.user);
+  };
+
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      accessToken,
+      refreshToken,
+      isAuthenticated: Boolean(user && accessToken),
+      loading,
+      login,
+      logout: doLogout,
+    }),
+    [user, accessToken, refreshToken, loading]
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+};
+
+export const useAuth = (): AuthContextValue => {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth debe usarse dentro de <AuthProvider>");
+  return ctx;
+};
+
+
+---
+web\src\components\Navbar.tsx
+
+// src/components/Navbar.tsx
+import React from 'react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext';
+
+export default function Navbar() {
+  const { user, logout } = useAuth();
+  return (
+    <nav style={{display:'flex',gap:12,padding:12,borderBottom:'1px solid #e5e5e5'}}>
+      <Link to="/">Home</Link>
+      <Link to="/projects">Projects</Link>
+      <div style={{marginLeft:'auto'}} />
+      {user ? (
+        <>
+          <span style={{opacity:.7}}>{user.nombre} {user.apellido}</span>
+          <button onClick={logout} style={{marginLeft:12}}>Salir</button>
+        </>
+      ) : (
+        <Link to="/login">Login</Link>
+      )}
+    </nav>
+  );
+}
+
+
+---
+web\src\components\Protected.tsx
+
+// web/src/components/Protected.tsx
+import React from "react";
+import { Navigate, Outlet } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
+
+export const Protected: React.FC = () => {
+  const { token } = useAuth();
+  if (!token) return <Navigate to="/login" replace />;
+  return <Outlet />;
+};
+
+
+---
+web\src\components\ProtectedRoute.tsx
+
+import React from "react";
+import { Navigate, useLocation } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
+
+const ProtectedRoute: React.FC<React.PropsWithChildren> = ({ children }) => {
+  const { isAuthenticated, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading) return <div style={{ padding: 24 }}>Cargando…</div>;
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+  return <>{children}</>;
+};
+
+export default ProtectedRoute;
+
+
+---
+web\src\components\TaskRow.tsx
+
+import { Task } from "../types";
+const ESTADOS = ["PENDIENTE", "EN_PROGRESO", "BLOQUEADA", "HECHA"] as const;
+
+export default function TaskRow({
+  task,
+  onChangeEstado,
+}: {
+  task: Task;
+  onChangeEstado: (estado: Task["estado"]) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between border rounded p-2">
+      <div>
+        <div className="font-medium">{task.titulo}</div>
+        {task.descripcion && <div className="text-sm text-gray-600">{task.descripcion}</div>}
+      </div>
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-gray-600">Estado</label>
+        <select
+          className="border rounded p-1"
+          value={task.estado}
+          onChange={(e) => onChangeEstado(e.target.value as Task["estado"])}
+        >
+          {ESTADOS.map(e => <option key={e} value={e}>{e}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+}
+
+
+---
+web\src\lib\api.ts
+
+let ACCESS_TOKEN: string | null = null;
+
+// Permite al AuthContext mantener sincronizado el token
+export function apiSetAccessToken(token: string | null) {
+  ACCESS_TOKEN = token;
+}
+
+function baseUrl() {
+  const url = import.meta.env.VITE_API_URL;
+  if (!url) throw new Error("Falta VITE_API_URL en web/.env");
+  return url;
+}
+
+async function tryRefresh(): Promise<boolean> {
+  const refresh = localStorage.getItem("refresh_token");
+  if (!refresh) return false;
+  try {
+    const res = await fetch(baseUrl() + "/api/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refresh }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data?.access_token) {
+      localStorage.setItem("access_token", data.access_token);
+      ACCESS_TOKEN = data.access_token;
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+export async function apiFetch<T = any>(
+  path: string,
+  opts: RequestInit = {},
+  retryOn401 = true
+): Promise<T> {
+  const headers = new Headers(opts.headers || {});
+  headers.set("Accept", "application/json");
+  if (!(opts.body instanceof FormData)) {
+    headers.set("Content-Type", headers.get("Content-Type") || "application/json");
+  }
+  if (ACCESS_TOKEN) headers.set("Authorization", `Bearer ${ACCESS_TOKEN}`);
+
+  const res = await fetch(baseUrl() + path, { ...opts, headers });
+
+  if (res.status === 401 && retryOn401) {
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      // reintenta una vez
+      return apiFetch<T>(path, opts, false);
+    }
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.detail || `HTTP ${res.status}`);
+  }
+  // si no hay contenido
+  if (res.status === 204) return null as T;
+  return (await res.json()) as T;
+}
+
+
+---
+web\src\pages\Home.tsx
+
+import React, { useEffect, useState } from "react";
+
+type Health = {
+  status: string;
+  database: string;
+  version: string;
+  timestamp: string;
+};
+
+export default function Home() {
+  const [health, setHealth] = useState<Health | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(import.meta.env.VITE_API_URL + "/health");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = (await res.json()) as Health;
+        setHealth(data);
+      } catch (e: any) {
+        setError(e?.message || "No se pudo obtener el health");
+      }
+    })();
+  }, []);
+
+  return (
+    <div style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
+      <h1>✅ ERP MVP UI en vivo</h1>
+      <p>Si ves esto, React está montado y Vite sirve la app.</p>
+
+      <h3>Health de API</h3>
+      {health && (
+        <pre
+          style={{
+            background: "#f6f6f6",
+            padding: 12,
+            borderRadius: 8,
+            overflowX: "auto",
+          }}
+        >
+          {JSON.stringify(health, null, 2)}
+        </pre>
+      )}
+      {!health && error && (
+        <div style={{ color: "#b00" }}>
+          ⚠️ No se pudo obtener el health: {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+---
+web\src\pages\Login.tsx
+
+import React, { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
+
+export default function Login() {
+  const { login } = useAuth();
+  const nav = useNavigate();
+  const location = useLocation() as any;
+  const redirectTo = location.state?.from?.pathname || "/projects";
+
+  const [email, setEmail] = useState("admin@miempresa.com");
+  const [password, setPassword] = useState("admin123");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr(null);
+    setLoading(true);
+    try {
+      await login(email, password);
+      nav(redirectTo, { replace: true });
+    } catch (ex: any) {
+      setErr(ex?.message || "Error de autenticación");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", fontFamily: "system-ui, sans-serif" }}>
+      <form onSubmit={onSubmit} style={{ width: 320, display: "grid", gap: 12 }}>
+        <h2>Iniciar sesión</h2>
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Email</span>
+          <input
+            autoFocus
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+          />
+        </label>
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Contraseña</span>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+          />
+        </label>
+        {err && <div style={{ color: "#b00" }}>{err}</div>}
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 8,
+            background: "#111827",
+            color: "white",
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          {loading ? "Entrando…" : "Entrar"}
+        </button>
+        <div style={{ fontSize: 12, color: "#555" }}>
+          Tip: usa <strong>admin@miempresa.com</strong> / <strong>admin123</strong>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+
+---
+web\src\pages\ProjectDetail.tsx
+
+import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+import { getJSON, patchJSON } from "../api";
+
+type Proyecto = {
+  id: number; nombre: string; estado: string; codigo?: string | null;
+};
+type Tarea = {
+  id: number; uuid: string; proyecto_id: number; titulo: string; estado: string; prioridad: number; real_horas?: number | null;
+};
+type Resumen = { proyecto_id: number; proyecto: string; estado: string; cantidad: number };
+
+const ESTADOS = ["PENDIENTE", "EN_PROGRESO", "HECHA"];
+
+export default function ProjectDetail() {
+  const { id } = useParams<{ id: string }>();
+  const pid = Number(id);
+
+  const [proj, setProj] = useState<Proyecto | null>(null);
+  const [tasks, setTasks] = useState<Tarea[]>([]);
+  const [resumen, setResumen] = useState<Resumen[]>([]);
+
+  async function load() {
+    const p = await getJSON<Proyecto>(`/api/projects/${pid}`);
+    setProj(p);
+    const t = await getJSON<Tarea[]>(`/api/projects/${pid}/tasks`);
+    setTasks(t);
+    const r = await getJSON<Resumen[]>(`/api/projects/${pid}/report/estado`);
+    setResumen(r);
+  }
+
+  useEffect(() => {
+    load().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pid]);
+
+  async function updateEstado(taskId: number, estado: string) {
+    await patchJSON<Tarea>(`/api/projects/tasks/${taskId}`, { estado });
+    await load();
+  }
+
+  return (
+    <div style={{ padding: 16 }}>
+      {!proj ? (
+        <div>Cargando...</div>
+      ) : (
+        <>
+          <h3>{proj.codigo || `#${proj.id}`} — {proj.nombre}</h3>
+
+          <div style={{ display: "flex", gap: 8, margin: "8px 0 16px" }}>
+            {resumen.map(r => (
+              <div key={r.estado} style={{ border: "1px solid #eee", borderRadius: 8, padding: "6px 10px" }}>
+                <strong>{r.estado}</strong>: {r.cantidad}
+              </div>
+            ))}
+            {resumen.length === 0 && <div style={{ color: "#888" }}>Sin datos de resumen.</div>}
+          </div>
+
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
+                <th style={{ padding: 8 }}>ID</th>
+                <th style={{ padding: 8 }}>Título</th>
+                <th style={{ padding: 8 }}>Estado</th>
+                <th style={{ padding: 8 }}>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tasks.map(t => (
+                <tr key={t.id} style={{ borderBottom: "1px solid #f3f3f3" }}>
+                  <td style={{ padding: 8 }}>{t.id}</td>
+                  <td style={{ padding: 8 }}>{t.titulo}</td>
+                  <td style={{ padding: 8 }}>{t.estado}</td>
+                  <td style={{ padding: 8 }}>
+                    <select value={t.estado} onChange={e => updateEstado(t.id, e.target.value)}>
+                      {ESTADOS.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+              {tasks.length === 0 && (
+                <tr><td colSpan={4} style={{ padding: 8, color: "#888" }}>No hay tareas.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
+  );
+}
+
+
+---
+web\src\pages\ProjectDetailPage.tsx
+
+// web/src/pages/ProjectDetailPage.tsx
+import { useEffect, useMemo, useState } from "react";
+import { useParams, Link } from "react-router-dom";
+import { createTask, getProjectTasks, Task, updateTask } from "../api/projects";
+
+const ESTADOS: Task["estado"][] = ["PENDIENTE", "EN_PROGRESO", "BLOQUEADA", "HECHA"];
+
+export default function ProjectDetailPage() {
+  const params = useParams();
+  const projectId = useMemo(() => Number(params.id), [params.id]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [titulo, setTitulo] = useState("");
+  const [descripcion, setDescripcion] = useState("");
+
+  async function refresh() {
+    setLoading(true);
+    setErr(null);
+    try {
+      setTasks(await getProjectTasks(projectId));
+    } catch (e: any) {
+      setErr(e?.message || "Error cargando tareas");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!Number.isFinite(projectId)) return;
+    refresh();
+  }, [projectId]);
+
+  async function onCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!titulo.trim()) return;
+    try {
+      await createTask({ proyecto_id: projectId, titulo, descripcion });
+      setTitulo("");
+      setDescripcion("");
+      await refresh();
+    } catch (e: any) {
+      alert(e?.message || "Error creando tarea");
+    }
+  }
+
+  async function onChangeState(t: Task, estado: Task["estado"]) {
+    try {
+      const updated = await updateTask(t.id, { estado });
+      setTasks((prev) => prev.map((x) => (x.id === t.id ? updated : x)));
+    } catch (e: any) {
+      alert(e?.message || "Error actualizando estado");
+    }
+  }
+
+  if (!Number.isFinite(projectId)) return <p className="p-4">Proyecto inválido.</p>;
+  if (loading) return <p className="p-4">Cargando...</p>;
+  if (err) return <p className="p-4" style={{ color: "crimson" }}>{err}</p>;
+
+  return (
+    <div className="p-4 max-w-3xl mx-auto">
+      <div className="mb-4">
+        <Link className="underline" to="/projects">← Volver</Link>
+      </div>
+      <h1 className="text-2xl font-semibold mb-3">Proyecto #{projectId}</h1>
+
+      <form onSubmit={onCreate} className="border rounded p-3 mb-6 space-y-2">
+        <div className="font-medium">Nueva tarea</div>
+        <input
+          value={titulo}
+          onChange={(e) => setTitulo(e.target.value)}
+          placeholder="Título"
+          className="w-full border rounded p-2"
+        />
+        <textarea
+          value={descripcion}
+          onChange={(e) => setDescripcion(e.target.value)}
+          placeholder="Descripción (opcional)"
+          className="w-full border rounded p-2"
+        />
+        <button className="border rounded px-3 py-1" type="submit">Crear</button>
+      </form>
+
+      <h2 className="text-xl font-semibold mb-2">Tareas</h2>
+      {tasks.length === 0 ? (
+        <p>No hay tareas.</p>
+      ) : (
+        <ul className="space-y-2">
+          {tasks.map((t) => (
+            <li key={t.id} className="border rounded p-3">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="font-medium">{t.titulo}</div>
+                  {t.descripcion && (
+                    <div className="text-sm text-gray-600">{t.descripcion}</div>
+                  )}
+                  <div className="text-sm text-gray-700 mt-1">
+                    Estado: <b>{t.estado}</b> · Prioridad: {t.prioridad}
+                  </div>
+                </div>
+                <select
+                  className="border rounded p-1"
+                  value={t.estado}
+                  onChange={(e) => onChangeState(t, e.target.value as Task["estado"])}
+                >
+                  {ESTADOS.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+
+---
+web\src\pages\Projects.tsx
+
+import React, { useEffect, useState } from "react";
+import { apiFetch } from "../lib/api";
+
+type Proyecto = {
+  id: number;
+  uuid: string;
+  codigo?: string | null;
+  nombre: string;
+  estado: string;
+  prioridad: number;
+  avance_pct?: number | null;
+  presupuesto_monto?: number | null;
+};
+
+export default function Projects() {
+  const [data, setData] = useState<Proyecto[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const items = await apiFetch<Proyecto[]>("/api/projects");
+        setData(items);
+      } catch (e: any) {
+        setErr(e?.message || "No se pudo cargar proyectos");
+      }
+    })();
+  }, []);
+
+  return (
+    <div style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
+      <h2>Proyectos</h2>
+      {err && <div style={{ color: "#b00" }}>⚠️ {err}</div>}
+      {!err && !data && <div>Cargando…</div>}
+      {data && data.length === 0 && <div>No hay proyectos</div>}
+      {data && data.length > 0 && (
+        <div style={{ display: "grid", gap: 8 }}>
+          {data.map((p) => (
+            <div key={p.id} style={{ padding: 12, border: "1px solid #eee", borderRadius: 8 }}>
+              <div style={{ fontWeight: 600 }}>{p.codigo || "(sin código)"} — {p.nombre}</div>
+              <div style={{ fontSize: 13, color: "#555" }}>
+                Estado: {p.estado} · Prioridad: {p.prioridad} · Avance: {p.avance_pct ?? 0}%
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+---
+web\src\pages\ProjectsPage.tsx
+
+// web/src/pages/ProjectsPage.tsx
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { getProjects, Project } from "../api/projects";
+
+export default function ProjectsPage() {
+  const [items, setItems] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setItems(await getProjects());
+      } catch (e: any) {
+        setErr(e?.message || "Error cargando proyectos");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  if (loading) return <p className="p-4">Cargando proyectos...</p>;
+  if (err) return <p className="p-4" style={{ color: "crimson" }}>{err}</p>;
+
+  return (
+    <div className="p-4 max-w-3xl mx-auto">
+      <h1 className="text-2xl font-semibold mb-4">Proyectos</h1>
+      {items.length === 0 ? (
+        <p>No hay proyectos.</p>
+      ) : (
+        <ul className="space-y-2">
+          {items.map((p) => (
+            <li key={p.id} className="border rounded p-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-medium">{p.nombre}</div>
+                  <div className="text-sm text-gray-600">
+                    Estado: {p.estado} · Prioridad: {p.prioridad} · Avance: {p.avance_pct}%
+                  </div>
+                </div>
+                <Link className="underline" to={`/projects/${p.id}`}>
+                  Ver
+                </Link>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+
+---
