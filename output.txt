@@ -4582,58 +4582,37 @@ export const api = {
 ---
 web\src\App.tsx
 
-import React from "react";
-import { Route, Routes } from "react-router-dom";
-import ProtectedRoute from "./components/ProtectedRoute";
-import Layout from "./components/Layout";
-
+// web/src/App.tsx
+import { Route, Routes, Navigate } from "react-router-dom";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Projects from "./pages/Projects";
 import ProjectDetail from "./pages/ProjectDetail";
 import Report from "./pages/Report";
+import ProtectedRoute from "./components/ProtectedRoute";
+import AppLayout from "./layouts/AppLayout";
+import SimpleLayout from "./layouts/SimpleLayout";
 
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
-
-      <Route element={<ProtectedRoute />}>
-        <Route
-          element={
-            <Layout>
-              <Home />
-            </Layout>
-          }
-          path="/"
-        />
-        <Route
-          element={
-            <Layout>
-              <Projects />
-            </Layout>
-          }
-          path="/projects"
-        />
-        <Route
-          element={
-            <Layout>
-              <ProjectDetail />
-            </Layout>
-          }
-          path="/projects/:id"
-        />
-        <Route
-          element={
-            <Layout>
-              <Report />
-            </Layout>
-          }
-          path="/projects/:id/report"
-        />
+      {/* Rutas públicas */}
+      <Route element={<SimpleLayout />}>
+        <Route path="/login" element={<Login />} />
       </Route>
 
-      <Route path="*" element={<div style={{ padding: 24 }}>404</div>} />
+      {/* Rutas privadas */}
+      <Route element={<ProtectedRoute />}>
+        <Route element={<AppLayout />}>
+          <Route index element={<Home />} />
+          <Route path="/projects" element={<Projects />} />
+          <Route path="/projects/:id" element={<ProjectDetail />} />
+          <Route path="/projects/:id/report" element={<Report />} />
+        </Route>
+      </Route>
+
+      {/* Fallback */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
@@ -4669,6 +4648,7 @@ export function hasRole(user: User | null, roleName: string): boolean {
 ---
 web\src\main.tsx
 
+// web/src/main.tsx
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
@@ -4677,11 +4657,11 @@ import { AuthProvider } from "./auth/AuthContext";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <AuthProvider>
+    <AuthProvider>
+      <BrowserRouter>
         <App />
-      </AuthProvider>
-    </BrowserRouter>
+      </BrowserRouter>
+    </AuthProvider>
   </React.StrictMode>
 );
 
@@ -4827,184 +4807,122 @@ export async function updateTask(
 ---
 web\src\auth\AuthContext.tsx
 
-import React, {createContext, useContext, useEffect, useMemo, useRef, useState} from "react";
-
-type Rol = { id: number; nombre: string; descripcion?: string; activo: boolean; created_at: string };
-type Departamento = { id: number; nombre: string; descripcion?: string };
+// web/src/auth/AuthContext.tsx
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 export type User = {
   id: number;
-  uuid: string;
   email: string;
-  nombre: string;
-  apellido: string;
-  nombre_completo: string;
-  telefono?: string | null;
-  activo: boolean;
-  ultimo_login?: string | null;
-  created_at: string;
-  roles: Rol[];
-  departamentos: Departamento[];
-};
-
-type LoginResponse = {
-  access_token: string;
-  refresh_token: string;
-  token_type: "bearer";
-  expires_in: number; // seconds
-  user: User;
-};
-
-type TokenRefreshResponse = {
-  access_token: string;
-  token_type: "bearer";
-  expires_in: number;
-};
-
-type AuthState = {
-  user: User | null;
-  accessToken: string | null;
-  refreshToken: string | null;
-  // epoch (ms) cuando expira el access
-  accessExp: number | null;
+  nombre?: string;
+  apellido?: string;
+  nombre_completo?: string;
+  roles?: { nombre: string }[];
 };
 
 type AuthContextType = {
   user: User | null;
+  loading: boolean;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   getAccessToken: () => Promise<string | null>;
 };
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextType | null>(null);
 
-const STORAGE_KEY = "erp_auth_v1";
+const AT_KEY = "erp.at";
+const RT_KEY = "erp.rt";
 const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 
-function loadStorage(): AuthState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { user: null, accessToken: null, refreshToken: null, accessExp: null };
-    return JSON.parse(raw);
-  } catch {
-    return { user: null, accessToken: null, refreshToken: null, accessExp: null };
-  }
-}
-
-function saveStorage(s: AuthState) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
-}
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [state, setState] = useState<AuthState>(() => loadStorage());
-  const timerRef = useRef<number | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(localStorage.getItem(AT_KEY));
+  const [refreshToken, setRefreshToken] = useState<string | null>(localStorage.getItem(RT_KEY));
+  const [accessExp, setAccessExp] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const scheduleRefresh = (secondsFromNow: number) => {
-    if (timerRef.current) window.clearTimeout(timerRef.current);
-    // refrescar 60s antes del vencimiento (o a los 60s si el token dura muy poco)
-    const ms = Math.max((secondsFromNow - 60) * 1000, 60_000);
-    timerRef.current = window.setTimeout(() => {
-      void refreshAccess();
-    }, ms) as unknown as number;
+  const saveTokens = (at: string, rt?: string, expiresIn?: number) => {
+    setAccessToken(at);
+    localStorage.setItem(AT_KEY, at);
+    if (rt) {
+      setRefreshToken(rt);
+      localStorage.setItem(RT_KEY, rt);
+    }
+    if (expiresIn) setAccessExp(Date.now() + expiresIn * 1000);
   };
 
-  const setAuth = (next: AuthState) => {
-    setState(next);
-    saveStorage(next);
-    if (next.accessExp && next.accessToken) {
-      const now = Date.now();
-      const secondsLeft = Math.max(1, Math.floor((next.accessExp - now) / 1000));
-      scheduleRefresh(secondsLeft);
-    } else if (timerRef.current) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
+  const fetchMe = async (token: string) => {
+    const res = await fetch(`${API}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error("Token inválido");
+    const u = (await res.json()) as User;
+    setUser(u);
+    return u;
   };
 
   const login = async (email: string, password: string) => {
-    const resp = await fetch(`${API}/api/auth/login`, {
+    const res = await fetch(`${API}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password })
     });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
       throw new Error(err?.detail || "Error de login");
     }
-    const data: LoginResponse = await resp.json();
-    const exp = Date.now() + data.expires_in * 1000;
-    setAuth({
-      user: data.user,
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      accessExp: exp
-    });
+    const data = (await res.json()) as { access_token: string; refresh_token: string; expires_in: number; user: User };
+    saveTokens(data.access_token, data.refresh_token, data.expires_in);
+    await fetchMe(data.access_token);
   };
 
-  const refreshAccess = async (): Promise<string | null> => {
-    if (!state.refreshToken) return null;
-    try {
-      const resp = await fetch(`${API}/api/auth/refresh`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: state.refreshToken })
-      });
-      if (!resp.ok) throw new Error("No se pudo refrescar sesión");
-      const data: TokenRefreshResponse = await resp.json();
-      const exp = Date.now() + data.expires_in * 1000;
-      const next: AuthState = {
-        ...state,
-        accessToken: data.access_token,
-        accessExp: exp
-      };
-      setAuth(next);
-      return data.access_token;
-    } catch {
-      // refresh inválido: cerrar sesión
+  const refresh = async (): Promise<string | null> => {
+    if (!refreshToken) return null;
+    const res = await fetch(`${API}/api/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken })
+    });
+    if (!res.ok) {
       logout();
       return null;
     }
-  };
-
-  const logout = () => {
-    setAuth({ user: null, accessToken: null, refreshToken: null, accessExp: null });
+    const data = (await res.json()) as { access_token: string; expires_in: number };
+    saveTokens(data.access_token, undefined, data.expires_in);
+    return data.access_token;
   };
 
   const getAccessToken = async () => {
-    // si falta poco, refrescamos
-    if (state.accessExp && state.accessExp - Date.now() < 60_000) {
-      return await refreshAccess();
+    if (accessExp && accessExp - Date.now() < 60_000) {
+      return await refresh();
     }
-    return state.accessToken;
+    return accessToken;
   };
 
-  // bootstrap: si tengo token, intento traer /me para confirmar usuario
+  const logout = () => {
+    localStorage.removeItem(AT_KEY);
+    localStorage.removeItem(RT_KEY);
+    setAccessToken(null);
+    setRefreshToken(null);
+    setAccessExp(null);
+    setUser(null);
+  };
+
   useEffect(() => {
-    const boot = async () => {
-      if (!state.accessToken) return;
+    (async () => {
       try {
-        const resp = await fetch(`${API}/api/auth/me`, {
-          headers: { Authorization: `Bearer ${state.accessToken}` }
-        });
-        if (!resp.ok) throw new Error("Token inválido");
-        const user: User = await resp.json();
-        setAuth({ ...state, user });
+        const at = localStorage.getItem(AT_KEY);
+        if (at) await fetchMe(at);
       } catch {
         logout();
+      } finally {
+        setLoading(false);
       }
-    };
-    void boot();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    })();
   }, []);
 
-  const value = useMemo<AuthContextType>(() => ({
-    user: state.user,
-    isAuthenticated: !!state.accessToken && !!state.user,
-    login,
-    logout,
-    getAccessToken
-  }), [state.user, state.accessToken, state.accessExp]);
+  const value = useMemo<AuthContextType>(
+    () => ({ user, loading, isAuthenticated: !!user, login, logout, getAccessToken }),
+    [user, loading]
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
@@ -5084,31 +5002,19 @@ export default function Navbar() {
 
 
 ---
-web\src\components\Protected.tsx
-
-// web/src/components/Protected.tsx
-import React from "react";
-import { Navigate, Outlet } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
-
-export const Protected: React.FC = () => {
-  const { token } = useAuth();
-  if (!token) return <Navigate to="/login" replace />;
-  return <Outlet />;
-};
-
-
----
 web\src\components\ProtectedRoute.tsx
 
-import React from "react";
-import { Navigate, Outlet } from "react-router-dom";
+// web/src/components/ProtectedRoute.tsx
+import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
 export default function ProtectedRoute() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading) return null; // o un spinner suave
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
   return <Outlet />;
 }
@@ -5149,69 +5055,122 @@ export default function TaskRow({
 
 
 ---
+web\src\layouts\AppLayout.tsx
+
+import React from "react";
+import { Outlet } from "react-router-dom";
+import Navbar from "../components/Navbar";
+
+export default function AppLayout() {
+  return (
+    <div>
+      <Navbar />
+      <main style={{ maxWidth: 1200, margin: "0 auto", padding: 16 }}>
+        <Outlet />
+      </main>
+    </div>
+  );
+}
+
+
+---
+web\src\layouts\SimpleLayout.tsx
+
+import React from "react";
+import { Outlet } from "react-router-dom";
+
+export default function SimpleLayout() {
+  return (
+    <div style={{ maxWidth: 960, margin: "0 auto", padding: 16 }}>
+      <Outlet />
+    </div>
+  );
+}
+
+
+---
 web\src\lib\api.ts
 
-let ACCESS_TOKEN: string | null = null;
+// web/src/lib/api.ts
+const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-// Permite al AuthContext mantener sincronizado el token
-export function apiSetAccessToken(token: string | null) {
-  ACCESS_TOKEN = token;
+type FetchOpts = RequestInit & { json?: any };
+
+function buildHeaders(access?: string, extra?: HeadersInit): HeadersInit {
+  const base: Record<string, string> = { "Content-Type": "application/json" };
+  if (access) base.Authorization = `Bearer ${access}`;
+  return { ...base, ...(extra || {}) }; // <-- corrección
 }
 
-function baseUrl() {
-  const url = import.meta.env.VITE_API_URL;
-  if (!url) throw new Error("Falta VITE_API_URL en web/.env");
-  return url;
-}
-
-async function tryRefresh(): Promise<boolean> {
-  const refresh = localStorage.getItem("refresh_token");
-  if (!refresh) return false;
+function getAuthFromStorage() {
   try {
-    const res = await fetch(baseUrl() + "/api/auth/refresh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refresh }),
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    if (data?.access_token) {
-      localStorage.setItem("access_token", data.access_token);
-      ACCESS_TOKEN = data.access_token;
-      return true;
-    }
-  } catch {}
-  return false;
+    return JSON.parse(localStorage.getItem("auth") || "{}");
+  } catch {
+    return {};
+  }
 }
 
-export async function apiFetch<T = any>(
-  path: string,
-  opts: RequestInit = {},
-  retryOn401 = true
-): Promise<T> {
-  const headers = new Headers(opts.headers || {});
-  headers.set("Accept", "application/json");
-  if (!(opts.body instanceof FormData)) {
-    headers.set("Content-Type", headers.get("Content-Type") || "application/json");
-  }
-  if (ACCESS_TOKEN) headers.set("Authorization", `Bearer ${ACCESS_TOKEN}`);
+function saveAuthToStorage(auth: any) {
+  localStorage.setItem("auth", JSON.stringify(auth));
+}
 
-  const res = await fetch(baseUrl() + path, { ...opts, headers });
+async function refreshAccessToken(refresh_token: string) {
+  const res = await fetch(`${BASE}/api/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token }),
+  });
+  if (!res.ok) throw new Error("Refresh inválido");
+  const data = await res.json();
+  return data as { access_token: string; expires_in: number; token_type: string };
+}
 
-  if (res.status === 401 && retryOn401) {
-    const refreshed = await tryRefresh();
-    if (refreshed) {
-      // reintenta una vez
-      return apiFetch<T>(path, opts, false);
+/**
+ * apiFetch — hace fetch con Bearer y, si recibe 401, intenta 1 refresh y reintenta.
+ * - Guarda el nuevo access_token en localStorage.auth
+ * - Si falla el refresh, limpia sesión (auth) y lanza error
+ */
+export async function apiFetch<T = any>(path: string, opts: FetchOpts = {}): Promise<T> {
+  const auth = getAuthFromStorage();
+  const access = auth?.access_token as string | undefined;
+  const refresh = auth?.refresh_token as string | undefined;
+
+  const headers = buildHeaders(access, opts.headers);
+  const body = opts.json !== undefined ? JSON.stringify(opts.json) : opts.body;
+
+  let res = await fetch(`${BASE}${path}`, { ...opts, headers, body });
+
+  if (res.status === 401 && refresh) {
+    // intentar refresh una sola vez
+    try {
+      const r = await refreshAccessToken(refresh);
+      const updated = { ...auth, access_token: r.access_token, expires_in: r.expires_in };
+      saveAuthToStorage(updated);
+
+      const retryHeaders = buildHeaders(r.access_token, opts.headers);
+      res = await fetch(`${BASE}${path}`, { ...opts, headers: retryHeaders, body });
+    } catch (e) {
+      localStorage.removeItem("auth");
+      throw new Error("Sesión expirada. Vuelve a iniciar sesión.");
     }
   }
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.detail || `HTTP ${res.status}`);
+    // intentar parsear JSON de error, si existe
+    let msg = res.statusText;
+    try {
+      const err = await res.json();
+      msg = err?.detail || JSON.stringify(err);
+    } catch {}
+    throw new Error(msg || "Error de solicitud");
   }
-  // si no hay contenido
-  if (res.status === 204) return null as T;
-  return (await res.json()) as T;
+
+  const ct = res.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    return (await res.json()) as T;
+  }
+  // por si alguna llamada devuelve vacío
+  return undefined as T;
 }
 
 
@@ -5258,13 +5217,17 @@ export default function Home() {
 ---
 web\src\pages\Login.tsx
 
+// web/src/pages/Login.tsx
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext"; // 👈 corrige este path
 
 export default function Login() {
   const { login } = useAuth();
-  const navigate = useNavigate();
+  const nav = useNavigate();
+  const location = useLocation() as any;
+  const redirectTo = location.state?.from?.pathname || "/projects";
+
   const [email, setEmail] = useState("admin@miempresa.com");
   const [password, setPassword] = useState("admin123");
   const [loading, setLoading] = useState(false);
@@ -5276,37 +5239,138 @@ export default function Login() {
     setLoading(true);
     try {
       await login(email, password);
-      navigate("/");
-    } catch (e: any) {
-      setErr(e?.message || "Error");
+      nav(redirectTo, { replace: true });
+    } catch (ex: any) {
+      setErr(ex?.message || "Error de autenticación");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ maxWidth: 420, margin: "80px auto", padding: 24, background: "white", borderRadius: 12, boxShadow: "0 6px 24px rgba(0,0,0,.08)" }}>
-      <h2 style={{ marginTop: 0 }}>Iniciar sesión</h2>
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 12 }}>
-        <label>
-          Email
-          <input value={email} onChange={e=>setEmail(e.target.value)} type="email" placeholder="tu@empresa.com"
-                 style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #cbd5e1" }} />
+    <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", fontFamily: "system-ui, sans-serif" }}>
+      <form onSubmit={onSubmit} style={{ width: 320, display: "grid", gap: 12 }}>
+        <h2>Iniciar sesión</h2>
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Email</span>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} required style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }} />
         </label>
-        <label>
-          Password
-          <input value={password} onChange={e=>setPassword(e.target.value)} type="password" placeholder="••••••••"
-                 style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #cbd5e1" }} />
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Contraseña</span>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} required style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }} />
         </label>
-        {err && <div style={{ color: "#b91c1c" }}>{err}</div>}
-        <button disabled={loading} type="submit" style={{ padding: "10px 14px", borderRadius: 8, background: "#0f172a", color: "white", border: "none", cursor: "pointer" }}>
-          {loading ? "Ingresando..." : "Ingresar"}
+        {err && <div style={{ color: "#b00" }}>{err}</div>}
+        <button type="submit" disabled={loading} style={{ padding: "10px 14px", borderRadius: 8, background: "#111827", color: "white", border: "none", cursor: "pointer" }}>
+          {loading ? "Entrando…" : "Entrar"}
         </button>
       </form>
     </div>
   );
 }
-  
+
+
+---
+web\src\pages\LoginPage.tsx
+
+import React, { useState } from "react";
+import { useAuth } from "../auth/AuthContext";
+import { useNavigate, Navigate } from "react-router-dom";
+
+export default function LoginPage() {
+  const { isAuthenticated, login } = useAuth();
+  const navigate = useNavigate();
+
+  const [email, setEmail] = useState("admin@miempresa.com");
+  const [password, setPassword] = useState("admin123");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (isAuthenticated) return <Navigate to="/projects" replace />;
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      await login(email, password);
+      navigate("/projects", { replace: true });
+    } catch (err: any) {
+      setError(err?.message || "Error al iniciar sesión");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 380, margin: "64px auto", padding: 24, border: "1px solid #eee", borderRadius: 12 }}>
+      <h1 style={{ marginBottom: 8 }}>Ingresar</h1>
+      <p style={{ color: "#666", marginTop: 0, marginBottom: 16 }}>
+        Usa las credenciales seed del README.
+      </p>
+
+      {error && (
+        <div style={{ background: "#fee", color: "#900", padding: "8px 12px", borderRadius: 8, marginBottom: 12 }}>
+          {error}
+        </div>
+      )}
+
+      <form onSubmit={onSubmit}>
+        <div style={{ display: "grid", gap: 12 }}>
+          <label>
+            <div style={{ fontSize: 12, color: "#555" }}>Email</div>
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              type="email"
+              required
+              style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+            />
+          </label>
+          <label>
+            <div style={{ fontSize: 12, color: "#555" }}>Password</div>
+            <input
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type="password"
+              required
+              style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #ccc" }}
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 8,
+              border: "1px solid #333",
+              background: loading ? "#ddd" : "#111",
+              color: "#fff",
+              cursor: loading ? "default" : "pointer"
+            }}
+          >
+            {loading ? "Entrando..." : "Entrar"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+
+---
+web\src\pages\NotFoundPage.tsx
+
+import React from "react";
+
+export default function NotFoundPage() {
+  return (
+    <div style={{ padding: 24 }}>
+      <h1>404</h1>
+      <p>Página no encontrada.</p>
+    </div>
+  );
+}
+
 
 ---
 web\src\pages\ProjectDetail.tsx
@@ -5415,123 +5479,154 @@ export default function ProjectDetail() {
 
 
 ---
-web\src\pages\ProjectDetailPage.tsx
+web\src\pages\ProjectDetailsPage.tsx
 
-// web/src/pages/ProjectDetailPage.tsx
+// web/src/pages/ProjectDetailsPage.tsx
 import { useEffect, useMemo, useState } from "react";
-import { useParams, Link } from "react-router-dom";
-import { createTask, getProjectTasks, Task, updateTask } from "../api/projects";
+import { useParams } from "react-router-dom";
+import { apiFetch } from "../lib/api";
 
-const ESTADOS: Task["estado"][] = ["PENDIENTE", "EN_PROGRESO", "BLOQUEADA", "HECHA"];
+type Proyecto = {
+  id: number; nombre: string; codigo?: string | null; estado: string; prioridad: number;
+};
+type Tarea = {
+  id: number; uuid: string; proyecto_id: number; titulo: string; estado: string; prioridad: number; real_horas?: number | null;
+};
+type ResumenItem = { proyecto_id: number; proyecto: string; estado: string; cantidad: number };
 
-export default function ProjectDetailPage() {
-  const params = useParams();
-  const projectId = useMemo(() => Number(params.id), [params.id]);
-  const [tasks, setTasks] = useState<Task[]>([]);
+export default function ProjectDetailsPage() {
+  const { id } = useParams();
+  const pid = Number(id);
+  const [p, setP] = useState<Proyecto | null>(null);
+  const [tareas, setTareas] = useState<Tarea[]>([]);
+  const [resumen, setResumen] = useState<ResumenItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  const [titulo, setTitulo] = useState("");
-  const [descripcion, setDescripcion] = useState("");
+  const [nueva, setNueva] = useState({ titulo: "", descripcion: "" });
+  const [saving, setSaving] = useState(false);
 
-  async function refresh() {
-    setLoading(true);
-    setErr(null);
+  const agrupado = useMemo(() => {
+    const map: Record<string, number> = {};
+    resumen.forEach(r => { map[r.estado] = (map[r.estado] || 0) + r.cantidad; });
+    return map;
+  }, [resumen]);
+
+  const load = async () => {
+    setLoading(true); setErr(null);
     try {
-      setTasks(await getProjectTasks(projectId));
+      const [proy, ts, res] = await Promise.all([
+        apiFetch<Proyecto>(`/api/projects/${pid}`),
+        apiFetch<Tarea[]>(`/api/projects/${pid}/tasks`),
+        apiFetch<ResumenItem[]>(`/api/projects/${pid}/report/estado`),
+      ]);
+      setP(proy); setTareas(ts); setResumen(res);
     } catch (e: any) {
-      setErr(e?.message || "Error cargando tareas");
+      setErr(e.message || "Error al cargar");
     } finally {
       setLoading(false);
     }
-  }
+  };
 
-  useEffect(() => {
-    if (!Number.isFinite(projectId)) return;
-    refresh();
-  }, [projectId]);
+  useEffect(() => { if (pid) load(); }, [pid]);
 
-  async function onCreate(e: React.FormEvent) {
+  const crearTarea = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!titulo.trim()) return;
+    if (!nueva.titulo.trim()) return;
+    setSaving(true);
     try {
-      await createTask({ proyecto_id: projectId, titulo, descripcion });
-      setTitulo("");
-      setDescripcion("");
-      await refresh();
+      await apiFetch<Tarea>("/api/projects/tasks", {
+        method: "POST",
+        json: { proyecto_id: pid, titulo: nueva.titulo, descripcion: nueva.descripcion || null, prioridad: 2 },
+      });
+      setNueva({ titulo: "", descripcion: "" });
+      await load();
     } catch (e: any) {
-      alert(e?.message || "Error creando tarea");
+      alert(e.message || "Error al crear tarea");
+    } finally {
+      setSaving(false);
     }
-  }
+  };
 
-  async function onChangeState(t: Task, estado: Task["estado"]) {
+  const cambiarEstado = async (t: Tarea, estado: string) => {
     try {
-      const updated = await updateTask(t.id, { estado });
-      setTasks((prev) => prev.map((x) => (x.id === t.id ? updated : x)));
+      await apiFetch<Tarea>(`/api/projects/tasks/${t.id}`, { method: "PATCH", json: { estado } });
+      await load();
     } catch (e: any) {
-      alert(e?.message || "Error actualizando estado");
+      alert(e.message || "No se pudo cambiar estado");
     }
-  }
+  };
 
-  if (!Number.isFinite(projectId)) return <p className="p-4">Proyecto inválido.</p>;
-  if (loading) return <p className="p-4">Cargando...</p>;
-  if (err) return <p className="p-4" style={{ color: "crimson" }}>{err}</p>;
+  if (loading) return <div style={{ padding: 16 }}>Cargando...</div>;
+  if (err) return <div style={{ padding: 16, color: "crimson" }}>{err}</div>;
+  if (!p) return <div style={{ padding: 16 }}>Proyecto no encontrado</div>;
 
   return (
-    <div className="p-4 max-w-3xl mx-auto">
-      <div className="mb-4">
-        <Link className="underline" to="/projects">← Volver</Link>
-      </div>
-      <h1 className="text-2xl font-semibold mb-3">Proyecto #{projectId}</h1>
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: 16 }}>
+      <h1>{p.nombre} {p.codigo ? <small style={{ color: "#666" }}>({p.codigo})</small> : null}</h1>
+      <p>Estado: <b>{p.estado}</b> | Prioridad: {p.prioridad}</p>
 
-      <form onSubmit={onCreate} className="border rounded p-3 mb-6 space-y-2">
-        <div className="font-medium">Nueva tarea</div>
-        <input
-          value={titulo}
-          onChange={(e) => setTitulo(e.target.value)}
-          placeholder="Título"
-          className="w-full border rounded p-2"
-        />
-        <textarea
-          value={descripcion}
-          onChange={(e) => setDescripcion(e.target.value)}
-          placeholder="Descripción (opcional)"
-          className="w-full border rounded p-2"
-        />
-        <button className="border rounded px-3 py-1" type="submit">Crear</button>
-      </form>
+      <section style={{ margin: "16px 0" }}>
+        <h3>Reporte por estado</h3>
+        {Object.keys(agrupado).length === 0 ? (
+          <p>Sin datos</p>
+        ) : (
+          <ul>
+            {Object.entries(agrupado).map(([k, v]) => (
+              <li key={k}>{k}: {v}</li>
+            ))}
+          </ul>
+        )}
+      </section>
 
-      <h2 className="text-xl font-semibold mb-2">Tareas</h2>
-      {tasks.length === 0 ? (
-        <p>No hay tareas.</p>
-      ) : (
-        <ul className="space-y-2">
-          {tasks.map((t) => (
-            <li key={t.id} className="border rounded p-3">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="font-medium">{t.titulo}</div>
-                  {t.descripcion && (
-                    <div className="text-sm text-gray-600">{t.descripcion}</div>
-                  )}
-                  <div className="text-sm text-gray-700 mt-1">
-                    Estado: <b>{t.estado}</b> · Prioridad: {t.prioridad}
-                  </div>
-                </div>
-                <select
-                  className="border rounded p-1"
-                  value={t.estado}
-                  onChange={(e) => onChangeState(t, e.target.value as Task["estado"])}
-                >
-                  {ESTADOS.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      <section style={{ margin: "16px 0" }}>
+        <h3>Nueva tarea</h3>
+        <form onSubmit={crearTarea} style={{ display: "grid", gap: 8, maxWidth: 500 }}>
+          <input
+            placeholder="Título *"
+            required
+            value={nueva.titulo}
+            onChange={(e) => setNueva({ ...nueva, titulo: e.target.value })}
+          />
+          <input
+            placeholder="Descripción (opcional)"
+            value={nueva.descripcion}
+            onChange={(e) => setNueva({ ...nueva, descripcion: e.target.value })}
+          />
+          <button type="submit" disabled={saving}>{saving ? "Creando..." : "Crear tarea"}</button>
+        </form>
+      </section>
+
+      <section style={{ margin: "16px 0" }}>
+        <h3>Tareas</h3>
+        <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th align="left">ID</th>
+              <th align="left">Título</th>
+              <th align="left">Estado</th>
+              <th align="left">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tareas.map((t) => (
+              <tr key={t.id} style={{ borderTop: "1px solid #eee" }}>
+                <td>{t.id}</td>
+                <td>{t.titulo}</td>
+                <td>{t.estado}</td>
+                <td style={{ display: "flex", gap: 8 }}>
+                  <button onClick={() => cambiarEstado(t, "PENDIENTE")}>Pendiente</button>
+                  <button onClick={() => cambiarEstado(t, "EN_PROGRESO")}>En progreso</button>
+                  <button onClick={() => cambiarEstado(t, "HECHA")}>Hecha</button>
+                </td>
+              </tr>
+            ))}
+            {tareas.length === 0 && (
+              <tr><td colSpan={4} style={{ textAlign: "center", padding: 24 }}>Sin tareas</td></tr>
+            )}
+          </tbody>
+        </table>
+      </section>
     </div>
   );
 }
@@ -5634,51 +5729,127 @@ web\src\pages\ProjectsPage.tsx
 // web/src/pages/ProjectsPage.tsx
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getProjects, Project } from "../api/projects";
+import { apiFetch } from "../lib/api";
+
+type Proyecto = {
+  id: number;
+  uuid: string;
+  codigo?: string | null;
+  nombre: string;
+  estado: string;
+  prioridad: number;
+  avance_pct?: number | null;
+  presupuesto_monto?: number | null;
+};
 
 export default function ProjectsPage() {
-  const [items, setItems] = useState<Project[]>([]);
+  const [items, setItems] = useState<Proyecto[]>([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [nuevo, setNuevo] = useState({ codigo: "", nombre: "", descripcion: "" });
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiFetch<Proyecto[]>("/api/projects");
+      setItems(data);
+    } catch (e: any) {
+      setError(e.message || "Error al cargar proyectos");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    (async () => {
-      try {
-        setItems(await getProjects());
-      } catch (e: any) {
-        setErr(e?.message || "Error cargando proyectos");
-      } finally {
-        setLoading(false);
-      }
-    })();
+    load();
   }, []);
 
-  if (loading) return <p className="p-4">Cargando proyectos...</p>;
-  if (err) return <p className="p-4" style={{ color: "crimson" }}>{err}</p>;
+  const createProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nuevo.nombre.trim()) return;
+    setSaving(true);
+    try {
+      await apiFetch<Proyecto>("/api/projects", {
+        method: "POST",
+        json: {
+          codigo: nuevo.codigo || null,
+          nombre: nuevo.nombre,
+          descripcion: nuevo.descripcion || null,
+          prioridad: 2,
+        },
+      });
+      setNuevo({ codigo: "", nombre: "", descripcion: "" });
+      await load();
+    } catch (e: any) {
+      alert(e.message || "Error al crear proyecto");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <div className="p-4 max-w-3xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">Proyectos</h1>
-      {items.length === 0 ? (
-        <p>No hay proyectos.</p>
-      ) : (
-        <ul className="space-y-2">
-          {items.map((p) => (
-            <li key={p.id} className="border rounded p-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="font-medium">{p.nombre}</div>
-                  <div className="text-sm text-gray-600">
-                    Estado: {p.estado} · Prioridad: {p.prioridad} · Avance: {p.avance_pct}%
-                  </div>
-                </div>
-                <Link className="underline" to={`/projects/${p.id}`}>
-                  Ver
-                </Link>
-              </div>
-            </li>
-          ))}
-        </ul>
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: 16 }}>
+      <h1>Proyectos</h1>
+
+      <form onSubmit={createProject} style={{ display: "grid", gap: 8, marginBottom: 24 }}>
+        <input
+          placeholder="Código (opcional)"
+          value={nuevo.codigo}
+          onChange={(e) => setNuevo({ ...nuevo, codigo: e.target.value })}
+        />
+        <input
+          placeholder="Nombre *"
+          required
+          value={nuevo.nombre}
+          onChange={(e) => setNuevo({ ...nuevo, nombre: e.target.value })}
+        />
+        <input
+          placeholder="Descripción (opcional)"
+          value={nuevo.descripcion}
+          onChange={(e) => setNuevo({ ...nuevo, descripcion: e.target.value })}
+        />
+        <button type="submit" disabled={saving}>
+          {saving ? "Creando..." : "Crear proyecto"}
+        </button>
+      </form>
+
+      {loading && <p>Cargando...</p>}
+      {error && <p style={{ color: "crimson" }}>{error}</p>}
+
+      {!loading && !error && (
+        <table width="100%" cellPadding={8} style={{ borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th align="left">ID</th>
+              <th align="left">Código</th>
+              <th align="left">Nombre</th>
+              <th align="left">Estado</th>
+              <th align="left">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((p) => (
+              <tr key={p.id} style={{ borderTop: "1px solid #eee" }}>
+                <td>{p.id}</td>
+                <td>{p.codigo || "-"}</td>
+                <td>{p.nombre}</td>
+                <td>{p.estado}</td>
+                <td>
+                  <Link to={`/projects/${p.id}`}>Ver</Link>
+                </td>
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={5} style={{ textAlign: "center", padding: 24 }}>
+                  Sin proyectos
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       )}
     </div>
   );

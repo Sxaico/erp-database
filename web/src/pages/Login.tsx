@@ -1,10 +1,14 @@
+// web/src/pages/Login.tsx
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext"; // 👈 corrige este path
 
 export default function Login() {
   const { login } = useAuth();
-  const navigate = useNavigate();
+  const nav = useNavigate();
+  const location = useLocation() as any;
+  const redirectTo = location.state?.from?.pathname || "/projects";
+
   const [email, setEmail] = useState("admin@miempresa.com");
   const [password, setPassword] = useState("admin123");
   const [loading, setLoading] = useState(false);
@@ -16,34 +20,31 @@ export default function Login() {
     setLoading(true);
     try {
       await login(email, password);
-      navigate("/");
-    } catch (e: any) {
-      setErr(e?.message || "Error");
+      nav(redirectTo, { replace: true });
+    } catch (ex: any) {
+      setErr(ex?.message || "Error de autenticación");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ maxWidth: 420, margin: "80px auto", padding: 24, background: "white", borderRadius: 12, boxShadow: "0 6px 24px rgba(0,0,0,.08)" }}>
-      <h2 style={{ marginTop: 0 }}>Iniciar sesión</h2>
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 12 }}>
-        <label>
-          Email
-          <input value={email} onChange={e=>setEmail(e.target.value)} type="email" placeholder="tu@empresa.com"
-                 style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #cbd5e1" }} />
+    <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", fontFamily: "system-ui, sans-serif" }}>
+      <form onSubmit={onSubmit} style={{ width: 320, display: "grid", gap: 12 }}>
+        <h2>Iniciar sesión</h2>
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Email</span>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} required style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }} />
         </label>
-        <label>
-          Password
-          <input value={password} onChange={e=>setPassword(e.target.value)} type="password" placeholder="••••••••"
-                 style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #cbd5e1" }} />
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Contraseña</span>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} required style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }} />
         </label>
-        {err && <div style={{ color: "#b91c1c" }}>{err}</div>}
-        <button disabled={loading} type="submit" style={{ padding: "10px 14px", borderRadius: 8, background: "#0f172a", color: "white", border: "none", cursor: "pointer" }}>
-          {loading ? "Ingresando..." : "Ingresar"}
+        {err && <div style={{ color: "#b00" }}>{err}</div>}
+        <button type="submit" disabled={loading} style={{ padding: "10px 14px", borderRadius: 8, background: "#111827", color: "white", border: "none", cursor: "pointer" }}>
+          {loading ? "Entrando…" : "Entrar"}
         </button>
       </form>
     </div>
   );
 }
-  
