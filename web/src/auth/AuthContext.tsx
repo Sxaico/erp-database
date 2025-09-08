@@ -1,54 +1,63 @@
-// src/context/AuthContext.tsx
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { api, tokenStore, User } from '../api';
-import { doLogout } from '../authHelpers';
+import React, { createContext, useContext, useEffect, useState } from "react";
 
-type Ctx = {
-  user: User | null;
-  setUser: (u: User | null) => void;
-  loading: boolean;
-  logout: () => void;
+type User = {
+  id: number;
+  email: string;
+  nombre?: string | null;
+  apellido?: string | null;
 };
 
-const AuthContext = createContext<Ctx>({
-  user: null, setUser: () => {}, loading: true, logout: () => {}
+type AuthContextValue = {
+  token: string | null;
+  user: User | null;
+  setToken: (t: string | null) => void;
+};
+
+const AuthContext = createContext<AuthContextValue>({
+  token: null,
+  user: null,
+  setToken: () => {},
 });
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
+  const [token, setToken] = useState<string | null>(
+    typeof window !== "undefined" ? localStorage.getItem("access_token") : null
+  );
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let alive = true;
-    async function boot() {
-      try {
-        if (tokenStore.access) {
-          const me = await api.me();
-          if (!alive) return;
-          setUser(me);
-        }
-      } catch (_) {
-        // token inválido → limpiar
-        doLogout();
-        setUser(null);
-      } finally {
-        if (alive) setLoading(false);
-      }
+    if (!token) {
+      setUser(null);
+      return;
     }
-    boot();
-    return () => { alive = false; };
-  }, []);
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error("me failed");
+        const data = await res.json();
+        setUser(data);
+      } catch {
+        setUser(null);
+      }
+    })();
+  }, [token]);
 
-  const logout = () => {
-    doLogout();
-    setUser(null);
-  };
+  // Mantener token en localStorage si alguien lo setea manualmente más adelante
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (token) localStorage.setItem("access_token", token);
+    else localStorage.removeItem("access_token");
+  }, [token]);
 
   return (
-    <AuthContext.Provider value={{ user, setUser, loading, logout }}>
+    <AuthContext.Provider value={{ token, user, setToken }}>
       {children}
     </AuthContext.Provider>
   );
-}
+};
 
-export function useAuth() { return useContext(AuthContext); }
+export const useAuth = () => useContext(AuthContext);

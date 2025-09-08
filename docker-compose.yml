@@ -56,3 +56,4 @@ services:
       - ./web:/app
     depends_on:
       - api
+
