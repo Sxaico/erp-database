@@ -2676,12 +2676,6 @@ CREATE INDEX IF NOT EXISTS idx_proyecto_miembros_usuario ON proyecto_miembros(us
 
 
 ---
-web\.env
-
-VITE_API_URL=http://localhost:8000
-
-
----
 web\index.html
 
 <!doctype html>

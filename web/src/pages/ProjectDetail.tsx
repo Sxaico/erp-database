@@ -1,101 +1,155 @@
-import React, { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
+// web/src/pages/ProjectDetail.tsx
+import { useEffect, useMemo, useState } from "react";
+import { useParams, Link } from "react-router-dom";
+import {
+  fetchTasks,
+  createTask,
+  patchTask,
+  fetchEstadoReport,
+  type Task,
+} from "../api";
 
-type Tarea = {
-  id: number;
-  uuid: string;
-  proyecto_id: number;
-  titulo: string;
-  estado: string;
-  prioridad: number;
-  real_horas?: number | null;
-};
+// Estados sugeridos. Podés ajustar esta lista en un solo lugar.
+const TASK_STATES = ["PENDIENTE", "EN_PROGRESO", "BLOQUEADA", "HECHA", "CANCELADA"] as const;
 
-const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-
-export default function ProjectDetail() {
-  const { id } = useParams<{ id: string }>();
-  const pid = Number(id);
-  const { getAccessToken } = useAuth();
-  const [items, setItems] = useState<Tarea[]>([]);
-  const [err, setErr] = useState<string | null>(null);
+export default function ProjectDetailPage() {
+  const { id } = useParams();
+  const projectId = Number(id);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [titulo, setTitulo] = useState("");
+  const [report, setReport] = useState<{ estado: string; cantidad: number }[]>([]);
+  const [savingTaskId, setSavingTaskId] = useState<number | null>(null);
 
-  const load = async () => {
-    setErr(null);
+  async function reloadReport() {
+    const r = await fetchEstadoReport(projectId);
+    setReport(r.map((x) => ({ estado: x.estado, cantidad: x.cantidad })));
+  }
+
+  async function load() {
     setLoading(true);
+    setErr(null);
     try {
-      const at = await getAccessToken();
-      const res = await fetch(`${API}/api/projects/${pid}/tasks`, {
-        headers: { Authorization: `Bearer ${at}` }
-      });
-      if (!res.ok) throw new Error("No se pudieron obtener tareas");
-      setItems(await res.json());
+      const [t, _] = await Promise.all([fetchTasks(projectId), reloadReport()]);
+      setTasks(t);
     } catch (e: any) {
       setErr(e?.message || "Error");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    load();
+  }, [projectId]);
 
-  const updateEstado = async (taskId: number, estado: string) => {
+  async function onCreate(e: React.FormEvent) {
+    e.preventDefault();
+    const t = titulo.trim();
+    if (!t) return;
+    await createTask({ proyecto_id: projectId, titulo: t, prioridad: 2 });
+    setTitulo("");
+    await load(); // refresca tareas + reporte
+  }
+
+  async function changeEstado(taskId: number, nuevoEstado: string) {
+    const prev = tasks.find((x) => x.id === taskId)?.estado;
+    if (!prev || prev === nuevoEstado) return;
+
+    setSavingTaskId(taskId);
+    // Optimista: actualizamos UI al toque
+    setTasks((curr) => curr.map((t) => (t.id === taskId ? { ...t, estado: nuevoEstado } : t)));
+
     try {
-      const at = await getAccessToken();
-      const res = await fetch(`${API}/api/projects/tasks/${taskId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${at}` },
-        body: JSON.stringify({ estado })
-      });
-      if (!res.ok) throw new Error("No se pudo actualizar tarea");
-      await load();
-    } catch (e: any) {
-      alert(e?.message || "Error al actualizar");
+      await patchTask(taskId, { estado: nuevoEstado });
+      await reloadReport();
+    } catch (e) {
+      // Revertir si falla
+      setTasks((curr) => curr.map((t) => (t.id === taskId ? { ...t, estado: prev } : t)));
+      alert("No se pudo actualizar el estado de la tarea.");
+    } finally {
+      setSavingTaskId(null);
     }
-  };
+  }
 
   return (
-    <div>
-      <h2>Proyecto #{pid} · Tareas</h2>
+    <div style={{ maxWidth: 900, margin: "24px auto", display: "grid", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <Link to="/projects">← Volver</Link>
+        <h2 style={{ margin: 0 }}>Proyecto #{projectId}</h2>
+      </div>
+
+      <form onSubmit={onCreate} style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 8 }}>
+        <input
+          placeholder="Nueva tarea..."
+          value={titulo}
+          onChange={(e) => setTitulo(e.target.value)}
+        />
+        <button type="submit">Crear tarea</button>
+      </form>
+
       {loading && <p>Cargando...</p>}
-      {err && <p style={{ color: "#b91c1c" }}>⚠️ {err}</p>}
-      {!loading && !err && (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", background: "white", borderRadius: 12, overflow: "hidden" }}>
-            <thead style={{ background: "#e2e8f0", textAlign: "left" }}>
-              <tr>
-                <th style={{ padding: 10 }}>#</th>
-                <th style={{ padding: 10 }}>Título</th>
-                <th style={{ padding: 10 }}>Estado</th>
-                <th style={{ padding: 10 }}>Prioridad</th>
-                <th style={{ padding: 10 }}>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(t => (
-                <tr key={t.id} style={{ borderBottom: "1px solid #e2e8f0" }}>
-                  <td style={{ padding: 10 }}>{t.id}</td>
-                  <td style={{ padding: 10 }}>{t.titulo}</td>
-                  <td style={{ padding: 10 }}>{t.estado}</td>
-                  <td style={{ padding: 10 }}>{t.prioridad}</td>
-                  <td style={{ padding: 10 }}>
-                    <select value={t.estado} onChange={(e)=>updateEstado(t.id, e.target.value)}>
-                      <option value="PENDIENTE">PENDIENTE</option>
-                      <option value="EN_PROGRESO">EN_PROGRESO</option>
-                      <option value="HECHA">HECHA</option>
+      {err && <p style={{ color: "crimson" }}>{err}</p>}
+
+      <section>
+        <h3 style={{ marginBottom: 8 }}>Tareas</h3>
+        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6 }}>
+          {tasks.map((t) => {
+            // Aseguramos que el estado actual esté siempre en el listado (por si viene algo distinto)
+            const options = Array.from(new Set([t.estado, ...TASK_STATES]));
+            return (
+              <li
+                key={t.id}
+                style={{
+                  padding: 12,
+                  border: "1px solid #eee",
+                  borderRadius: 8,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <div>
+                  <strong>{t.titulo}</strong>
+                  <br />
+                  <small>Prioridad: {t.prioridad}</small>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <label>
+                    <small>Estado:&nbsp;</small>
+                    <select
+                      value={t.estado}
+                      disabled={savingTaskId === t.id}
+                      onChange={(e) => changeEstado(t.id, e.target.value)}
+                    >
+                      {options.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
                     </select>
-                  </td>
-                </tr>
-              ))}
-              {items.length === 0 && (
-                <tr><td colSpan={5} style={{ padding: 10, textAlign: "center" }}>Sin tareas.</td></tr>
-              )}
-            </tbody>
-          </table>
+                  </label>
+                  {savingTaskId === t.id && <small style={{ opacity: 0.7 }}>Guardando…</small>}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section>
+        <h3 style={{ marginBottom: 8 }}>Reporte por estado</h3>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {report.map((r) => (
+            <div key={r.estado} style={{ border: "1px solid #eee", borderRadius: 8, padding: "8px 12px" }}>
+              <strong>{r.estado}</strong>: {r.cantidad}
+            </div>
+          ))}
+          {!report.length && <small>No hay datos</small>}
         </div>
-      )}
+      </section>
     </div>
   );
 }

@@ -1,99 +1,130 @@
-// src/api.ts
-export interface Role { id: number; nombre: string; }
-export interface User {
-  id: number; email: string; nombre: string; apellido: string;
-  roles: Role[]; activo: boolean;
-}
-export interface Tokens { access_token: string; refresh_token?: string; token_type?: string; expires_in?: number; }
-export interface Project {
-  id: number; uuid: string; codigo: string | null; nombre: string;
-  estado: string; prioridad: number; avance_pct: number; presupuesto_monto: number;
-}
-export interface HealthResponse { status: string; db: string; version: string; }
+// web/src/api.ts
+const API_BASE = (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
 
-const API_BASE =
-  (import.meta as any).env?.VITE_API_URL ||
-  window.location.origin.replace(':5173', ':8000');
-
-const AT_KEY = 'erp.at';
-const RT_KEY = 'erp.rt';
-
-export const tokenStore = {
-  get access() { return localStorage.getItem(AT_KEY) || ''; },
-  set access(v: string) { localStorage.setItem(AT_KEY, v); },
-  get refresh() { return localStorage.getItem(RT_KEY) || ''; },
-  set refresh(v: string) { localStorage.setItem(RT_KEY, v); },
-  clear() { localStorage.removeItem(AT_KEY); localStorage.removeItem(RT_KEY); }
+type LoginResp = {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  user: any;
 };
 
-async function refreshAccessToken(): Promise<string | null> {
-  const rt = tokenStore.refresh;
-  if (!rt) return null;
-  const res = await fetch(`${API_BASE}/api/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: rt })
+type RefreshResp = {
+  access_token: string;
+  expires_in: number;
+};
+
+const storage = {
+  get access() { return localStorage.getItem("access_token"); },
+  set access(v: string | null) { v ? localStorage.setItem("access_token", v) : localStorage.removeItem("access_token"); },
+  get refresh() { return localStorage.getItem("refresh_token"); },
+  set refresh(v: string | null) { v ? localStorage.setItem("refresh_token", v) : localStorage.removeItem("refresh_token"); },
+  get exp() { const v = localStorage.getItem("access_exp"); return v ? parseInt(v) : 0; },
+  set exp(ts: number | null) { ts ? localStorage.setItem("access_exp", String(ts)) : localStorage.removeItem("access_exp"); },
+  clear() { this.access = null; this.refresh = null; this.exp = null; }
+};
+
+export function isAuthenticated() {
+  return !!storage.access;
+}
+
+export async function login(email: string, password: string) {
+  const r = await fetch(`${API_BASE}/api/auth/login`, {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ email, password })
   });
-  if (!res.ok) return null;
-  const data = await res.json() as Tokens;
-  if (data.access_token) {
-    tokenStore.access = data.access_token;
-    return data.access_token;
-  }
-  return null;
+  if (!r.ok) throw new Error("Credenciales inválidas");
+  const data = (await r.json()) as LoginResp;
+  storage.access = data.access_token;
+  storage.refresh = data.refresh_token;
+  storage.exp = Date.now() + data.expires_in * 1000;
+  return data;
 }
 
-async function request<T>(path: string, init?: RequestInit, retry = true): Promise<T> {
-  const headers = new Headers(init?.headers || {});
-  if (!headers.has('Content-Type') && init?.body) headers.set('Content-Type', 'application/json');
-  const at = tokenStore.access;
-  if (at) headers.set('Authorization', `Bearer ${at}`);
-
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  if (res.status === 401 && retry) {
-    const newAT = await refreshAccessToken();
-    if (newAT) {
-      const headers2 = new Headers(init?.headers || {});
-      if (!headers2.has('Content-Type') && init?.body) headers2.set('Content-Type', 'application/json');
-      headers2.set('Authorization', `Bearer ${newAT}`);
-      const res2 = await fetch(`${API_BASE}${path}`, { ...init, headers: headers2 });
-      if (!res2.ok) throw new Error(`${res2.status} ${res2.statusText}`);
-      return res2.json() as Promise<T>;
-    }
-  }
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json() as Promise<T>;
+export function logout() {
+  storage.clear();
 }
 
-export const api = {
-  async login(email: string, password: string): Promise<User> {
-    const res = await fetch(`${API_BASE}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-    if (!res.ok) throw new Error('Credenciales inválidas');
-    const data = await res.json() as Tokens & User; // login retorna tokens + (a veces user). Cubrimos tokens seguro.
-    if (data.access_token) tokenStore.access = data.access_token;
-    if (data.refresh_token) tokenStore.refresh = data.refresh_token;
-    // Aseguramos el user llamando a /me:
-    return this.me();
-  },
-  me(): Promise<User> {
-    return request<User>('/api/auth/me');
-  },
-  health(): Promise<HealthResponse> {
-    return request<HealthResponse>('/health', { method: 'GET' });
-  },
-  projects: {
-    list(): Promise<Project[]> {
-      return request<Project[]>('/api/projects', { method: 'GET' });
-    },
-    create(payload: { nombre: string; descripcion?: string }): Promise<Project> {
-      return request<Project>('/api/projects', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
+async function refreshAccessToken(): Promise<void> {
+  if (!storage.refresh) throw new Error("No refresh token");
+  const r = await fetch(`${API_BASE}/api/auth/refresh`, {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ refresh_token: storage.refresh })
+  });
+  if (!r.ok) throw new Error("Refresh inválido");
+  const data = (await r.json()) as RefreshResp;
+  storage.access = data.access_token;
+  storage.exp = Date.now() + data.expires_in * 1000;
+}
+
+let refreshing = false;
+
+export async function apiFetch<T = any>(
+  path: string,
+  opts: RequestInit = {},
+  _retry = false
+): Promise<T> {
+  const headers: Record<string,string> = {
+    "Content-Type": "application/json",
+    ...(opts.headers as Record<string,string> || {})
+  };
+  if (storage.access) headers.Authorization = `Bearer ${storage.access}`;
+
+  const res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
+
+  if (res.status === 401 && storage.refresh && !_retry) {
+    // intenta refresh una vez
+    if (!refreshing) {
+      refreshing = true;
+      try { await refreshAccessToken(); }
+      finally { refreshing = false; }
+    } else {
+      // si otro request ya refresca, esperá un tick corto
+      await new Promise(r => setTimeout(r, 250));
     }
+    return apiFetch<T>(path, opts, true);
   }
+
+  if (res.status === 204) return null as unknown as T;
+  if (!res.ok) {
+    const msg = await res.text().catch(()=> "Error");
+    throw new Error(msg || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// --- APIs específicas ---
+export type Project = {
+  id: number; uuid: string; codigo: string|null; nombre: string;
+  estado: string; prioridad: number; avance_pct: number|null; presupuesto_monto: number|null;
 };
+
+export type Task = {
+  id: number; uuid: string; proyecto_id: number;
+  titulo: string; estado: string; prioridad: number; real_horas: number|null;
+};
+
+export async function fetchProjects(): Promise<Project[]> {
+  return apiFetch<Project[]>("/api/projects");
+}
+
+export async function createProject(input: { nombre: string; codigo?: string|null; descripcion?: string|null; prioridad?: number; }): Promise<Project> {
+  return apiFetch<Project>("/api/projects", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function fetchTasks(projectId: number): Promise<Task[]> {
+  return apiFetch<Task[]>(`/api/projects/${projectId}/tasks`);
+}
+
+export async function createTask(input: { proyecto_id: number; titulo: string; descripcion?: string|null; prioridad?: number; }): Promise<Task> {
+  return apiFetch<Task>("/api/projects/tasks", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function patchTask(taskId: number, patch: Partial<Pick<Task,"titulo"|"descripcion"|"prioridad"|"estado">>) {
+  return apiFetch<Task>(`/api/projects/tasks/${taskId}`, { method: "PATCH", body: JSON.stringify(patch) });
+}
+
+export async function fetchEstadoReport(projectId: number): Promise<{ proyecto_id:number; proyecto:string; estado:string; cantidad:number; }[]> {
+  return apiFetch(`/api/projects/${projectId}/report/estado`);
+}

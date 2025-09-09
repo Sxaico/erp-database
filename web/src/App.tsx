@@ -1,34 +1,38 @@
 // web/src/App.tsx
-import { Route, Routes, Navigate } from "react-router-dom";
-import Home from "./pages/Home";
-import Login from "./pages/Login";
-import Projects from "./pages/Projects";
-import ProjectDetail from "./pages/ProjectDetail";
-import Report from "./pages/Report";
-import ProtectedRoute from "./components/ProtectedRoute";
-import AppLayout from "./layouts/AppLayout";
-import SimpleLayout from "./layouts/SimpleLayout";
+import { Routes, Route, Navigate, Link, useNavigate } from "react-router-dom";
+import LoginPage from "./pages/Login";
+import ProjectsPage from "./pages/Projects";
+import ProjectDetailPage from "./pages/ProjectDetail";
+import { isAuthenticated, logout } from "./api";
+
+function Nav() {
+  const nav = useNavigate();
+  return (
+    <nav style={{display:"flex", gap:12, padding:12, borderBottom:"1px solid #eee"}}>
+      <Link to="/projects">Proyectos</Link>
+      <div style={{flex:1}} />
+      {isAuthenticated() ? (
+        <button onClick={() => { logout(); nav("/login"); }}>Salir</button>
+      ) : <Link to="/login">Login</Link>}
+    </nav>
+  );
+}
+
+function Protected({ children }: { children: React.ReactNode }) {
+  if (!isAuthenticated()) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
 
 export default function App() {
   return (
-    <Routes>
-      {/* Rutas públicas */}
-      <Route element={<SimpleLayout />}>
-        <Route path="/login" element={<Login />} />
-      </Route>
-
-      {/* Rutas privadas */}
-      <Route element={<ProtectedRoute />}>
-        <Route element={<AppLayout />}>
-          <Route index element={<Home />} />
-          <Route path="/projects" element={<Projects />} />
-          <Route path="/projects/:id" element={<ProjectDetail />} />
-          <Route path="/projects/:id/report" element={<Report />} />
-        </Route>
-      </Route>
-
-      {/* Fallback */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <>
+      <Nav />
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/projects" element={<Protected><ProjectsPage /></Protected>} />
+        <Route path="/projects/:id" element={<Protected><ProjectDetailPage /></Protected>} />
+        <Route path="*" element={<Navigate to={isAuthenticated()?"/projects":"/login"} replace />} />
+      </Routes>
+    </>
   );
 }
