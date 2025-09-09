@@ -114,10 +114,10 @@ http://localhost:8080/
 **Auth**
 
 * `POST /api/auth/login` → `{ access_token, refresh_token, expires_in, user }`
+* `POST /api/auth/refresh` → `{ access_token, expires_in }`
 * `GET /api/auth/me` (Bearer) → datos del usuario logueado
 * `GET /api/auth/users` (Solo Admin/Super Admin) → lista de usuarios
 
-> Nota: El **refresh** está planificado. El `refresh_token` viene en la respuesta de login y se activará cuando agreguemos `POST /api/auth/refresh`.
 
 **Projects & Tasks**
 

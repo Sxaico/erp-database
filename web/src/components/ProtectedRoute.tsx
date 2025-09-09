@@ -1,9 +1,12 @@
-// web/src/components/ProtectedRoute.tsx
-import { Navigate, useLocation } from "react-router-dom";
-import { isLoggedIn } from "../api";
+// web/src/routes/ProtectedRoute.tsx
+import React from "react";
+import { Navigate, Outlet, useLocation } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 
-export default function ProtectedRoute({ children }: { children: JSX.Element }) {
+export default function ProtectedRoute() {
+  const { user, loading } = useAuth();
   const loc = useLocation();
-  if (!isLoggedIn()) return <Navigate to="/login" replace state={{ from: loc }} />;
-  return children;
+  if (loading) return <div style={{padding:16}}>Cargando…</div>;
+  if (!user) return <Navigate to="/login" replace state={{ from: loc }} />;
+  return <Outlet />;
 }

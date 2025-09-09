@@ -202,10 +202,10 @@ http://localhost:8080/
 **Auth**
 
 * `POST /api/auth/login` → `{ access_token, refresh_token, expires_in, user }`
+* `POST /api/auth/refresh` → `{ access_token, expires_in }`
 * `GET /api/auth/me` (Bearer) → datos del usuario logueado
 * `GET /api/auth/users` (Solo Admin/Super Admin) → lista de usuarios
 
-> Nota: El **refresh** está planificado. El `refresh_token` viene en la respuesta de login y se activará cuando agreguemos `POST /api/auth/refresh`.
 
 **Projects & Tasks**
 
@@ -4472,27 +4472,32 @@ export async function fetchEstadoReport(projectId: number): Promise<EstadoReport
 web\src\App.tsx
 
 // web/src/App.tsx
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import ProtectedRoute from "./components/ProtectedRoute";
-import LoginPage from "./pages/Login";
-import ProjectsPage from "./pages/Projects";
-import ProjectDetailPage from "./pages/ProjectDetail";
+import React from "react";
+import { Link, Outlet } from "react-router-dom";
+import { useAuth } from "./auth/AuthContext";
 
 export default function App() {
+  const { user, logout } = useAuth();
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Navigate to="/projects" replace />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/projects" element={
-          <ProtectedRoute><ProjectsPage /></ProtectedRoute>
-        } />
-        <Route path="/projects/:id" element={
-          <ProtectedRoute><ProjectDetailPage /></ProtectedRoute>
-        } />
-        <Route path="*" element={<Navigate to="/projects" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <div>
+      <header style={{display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 16px", borderBottom:"1px solid #eee"}}>
+        <div style={{display:"flex", gap:12, alignItems:"center"}}>
+          <strong>ERP MVP</strong>
+          <Link to="/projects">Proyectos</Link>
+        </div>
+        <div>
+          {user ? (
+            <>
+              <span style={{marginRight:12, opacity:.8}}>
+                {user.nombre} {user.apellido}
+              </span>
+              <button onClick={logout}>Salir</button>
+            </>
+          ) : <Link to="/login">Ingresar</Link>}
+        </div>
+      </header>
+      <Outlet />
+    </div>
   );
 }
 
@@ -4530,13 +4535,86 @@ web\src\main.tsx
 // web/src/main.tsx
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 import App from "./App";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
+import ProtectedRoute from "./components/ProtectedRoute";
+import Login from "./pages/Login";
+import Projects from "./pages/Projects";
+import ProjectDetail from "./pages/ProjectDetail";
+import "./tiny.css";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+
+function RootRedirect() {
+  const { user } = useAuth();
+  return <Navigate to={user ? "/projects" : "/login"} replace />;
+}
+
+const router = createBrowserRouter([
+  {
+    path: "/",
+    element: <App />,
+    children: [
+      { index: true, element: <RootRedirect /> },
+      { path: "login", element: <Login /> },
+      {
+        element: <ProtectedRoute />,
+        children: [
+          { path: "projects", element: <Projects /> },
+          { path: "projects/:id", element: <ProjectDetail /> },
+        ]
+      }
+    ]
+  }
+]);
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <AuthProvider>
+      <RouterProvider router={router} />
+    </AuthProvider>
   </React.StrictMode>
 );
+
+
+---
+web\src\tiny.css
+
+:root {
+  --bg:#0b0c10; --panel:#121317; --muted:#a0a6b0; --text:#e5e7eb;
+  --accent:#7c3aed; --ok:#10b981; --warn:#f59e0b; --red:#ef4444;
+}
+*{box-sizing:border-box}
+html,body,#root{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,Noto Sans,"Apple Color Emoji","Segoe UI Emoji";
+}
+a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+button{border:0;border-radius:12px;padding:8px 12px;background:var(--accent);color:#fff;cursor:pointer}
+button:disabled{filter:saturate(.5);cursor:not-allowed}
+input,select{background:#0f1015;color:var(--text);border:1px solid #24262f;border-radius:10px;padding:8px 10px}
+.card{background:var(--panel);border:1px solid #1f2230;border-radius:16px;padding:16px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.list{display:grid;gap:8px}
+
+/* utilitarias que ya usás */
+.flex{display:flex}
+.items-center{align-items:center}
+.justify-between{justify-content:space-between}
+.gap-2{gap:.5rem}
+.p-1{padding:.25rem}
+.p-2{padding:.5rem}
+.border{border:1px solid #262938}
+.rounded{border-radius:12px}
+.text-sm{font-size:.9rem}
+.text-gray-600{color:var(--muted)}
+.font-medium{font-weight:600}
+.badge{font-size:.75rem;padding:.2rem .5rem;border-radius:9999px;border:1px solid #262938;background:#151823}
+
+/* estados opcionales */
+.status-hecha{color:var(--ok)}
+.status-bloqueada{color:var(--red)}
+.status-progreso{color:var(--warn)}
 
 
 ---
@@ -4573,51 +4651,97 @@ export type ResumenEstadoItem = {
 ---
 web\src\api\auth.ts
 
-import { apiFetch } from "./client";
-
-export type Role = { id: number; nombre: string; activo: boolean };
+// web/src/api/auth.ts
 export type User = {
   id: number; email: string; nombre: string; apellido: string;
-  roles: Role[];
+  roles?: { id:number; nombre:string }[];
 };
 
-export async function login(email: string, password: string) {
-  return apiFetch("/api/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  }) as Promise<{ access_token: string; refresh_token: string; user: User }>;
-}
+const ACCESS_KEY = "access_token";
+const REFRESH_KEY = "refresh_token";
+const USER_KEY = "user";
 
-export async function me() {
-  return apiFetch("/api/auth/me") as Promise<User>;
-}
+export const setSession = (access: string, refresh: string, user?: User) => {
+  localStorage.setItem(ACCESS_KEY, access);
+  localStorage.setItem(REFRESH_KEY, refresh);
+  if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
+  window.dispatchEvent(new Event("storage")); // notificar a context
+};
+
+export const clearSession = () => {
+  localStorage.removeItem(ACCESS_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+  localStorage.removeItem(USER_KEY);
+  window.dispatchEvent(new Event("storage"));
+};
+
+export const getAccessToken = () => localStorage.getItem(ACCESS_KEY) || "";
+export const getRefreshToken = () => localStorage.getItem(REFRESH_KEY) || "";
+export const getUser = (): User | null => {
+  const raw = localStorage.getItem(USER_KEY);
+  return raw ? JSON.parse(raw) as User : null;
+};
 
 
 ---
 web\src\api\client.ts
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// web/src/api/client.ts
+import { getAccessToken, getRefreshToken, setSession, clearSession } from "./auth";
 
-function getToken() {
-  return localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
+const API_BASE = "http://localhost:8000";
+
+type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
+type ReqOpts = { method?: HttpMethod; body?: any; headers?: Record<string,string> };
+
+async function refreshAccessToken(): Promise<boolean> {
+  const rt = getRefreshToken();
+  if (!rt) return false;
+  const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: rt })
+  });
+  if (!res.ok) return false;
+  const data = await res.json(); // { access_token, expires_in, ... }
+  setSession(data.access_token, rt);
+  return true;
 }
 
-export async function apiFetch(path: string, init: RequestInit = {}) {
-  const token = getToken();
-  const headers = new Headers(init.headers || {});
-  headers.set("Content-Type", "application/json");
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+export async function fetchJson<T = any>(path: string, opts: ReqOpts = {}, retry = true): Promise<T> {
+  const headers: Record<string,string> = {
+    "Content-Type": "application/json",
+    ...(opts.headers || {})
+  };
+  const at = getAccessToken();
+  if (at) headers.Authorization = `Bearer ${at}`;
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  if (!res.ok) {
-    const msg = await res.text().catch(() => "");
-    throw new Error(msg || `HTTP ${res.status}`);
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: opts.method || "GET",
+    headers,
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+
+  if (res.status === 401 && retry) {
+    const ok = await refreshAccessToken();
+    if (ok) return fetchJson<T>(path, opts, false);
+    clearSession();
+    throw new Error("Sesión expirada");
   }
-  const ct = res.headers.get("content-type") || "";
-  return ct.includes("application/json") ? res.json() : res.text();
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || `Error HTTP ${res.status}`);
+  }
+  return res.status === 204 ? (undefined as T) : await res.json();
 }
 
-export { API_BASE };
+export const api = {
+  get: <T>(p: string) => fetchJson<T>(p),
+  post: <T>(p: string, b?: any) => fetchJson<T>(p, { method: "POST", body: b }),
+  patch: <T>(p: string, b?: any) => fetchJson<T>(p, { method: "PATCH", body: b }),
+  del: <T>(p: string) => fetchJson<T>(p, { method: "DELETE" }),
+};
 
 
 ---
@@ -4682,129 +4806,47 @@ web\src\auth\AuthContext.tsx
 
 // web/src/auth/AuthContext.tsx
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { api } from "../api/client";
+import { clearSession, getUser, setSession, type User } from "../api/auth";
 
-export type User = {
-  id: number;
-  email: string;
-  nombre?: string;
-  apellido?: string;
-  nombre_completo?: string;
-  roles?: { nombre: string }[];
-};
-
-type AuthContextType = {
-  user: User | null;
-  loading: boolean;
-  isAuthenticated: boolean;
+type AuthState = { user: User | null; loading: boolean; };
+type AuthCtx = AuthState & {
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
-  getAccessToken: () => Promise<string | null>;
 };
+const Ctx = createContext<AuthCtx>({ user: null, loading: true, login: async ()=>{}, logout: ()=>{} });
 
-const AuthContext = createContext<AuthContextType | null>(null);
+export const AuthProvider: React.FC<{children: React.ReactNode}> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(getUser());
+  const [loading, setLoading] = useState<boolean>(false);
 
-const AT_KEY = "erp.at";
-const RT_KEY = "erp.rt";
-const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(localStorage.getItem(AT_KEY));
-  const [refreshToken, setRefreshToken] = useState<string | null>(localStorage.getItem(RT_KEY));
-  const [accessExp, setAccessExp] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const saveTokens = (at: string, rt?: string, expiresIn?: number) => {
-    setAccessToken(at);
-    localStorage.setItem(AT_KEY, at);
-    if (rt) {
-      setRefreshToken(rt);
-      localStorage.setItem(RT_KEY, rt);
-    }
-    if (expiresIn) setAccessExp(Date.now() + expiresIn * 1000);
-  };
-
-  const fetchMe = async (token: string) => {
-    const res = await fetch(`${API}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) throw new Error("Token inválido");
-    const u = (await res.json()) as User;
-    setUser(u);
-    return u;
-  };
+  useEffect(() => {
+    const onStorage = () => setUser(getUser());
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   const login = async (email: string, password: string) => {
-    const res = await fetch(`${API}/api/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password })
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.detail || "Error de login");
+    setLoading(true);
+    try {
+      const data = await api.post<{access_token:string; refresh_token:string; user:User}>("/api/auth/login", { email, password });
+      setSession(data.access_token, data.refresh_token, data.user);
+      setUser(data.user);
+    } finally {
+      setLoading(false);
     }
-    const data = (await res.json()) as { access_token: string; refresh_token: string; expires_in: number; user: User };
-    saveTokens(data.access_token, data.refresh_token, data.expires_in);
-    await fetchMe(data.access_token);
-  };
-
-  const refresh = async (): Promise<string | null> => {
-    if (!refreshToken) return null;
-    const res = await fetch(`${API}/api/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken })
-    });
-    if (!res.ok) {
-      logout();
-      return null;
-    }
-    const data = (await res.json()) as { access_token: string; expires_in: number };
-    saveTokens(data.access_token, undefined, data.expires_in);
-    return data.access_token;
-  };
-
-  const getAccessToken = async () => {
-    if (accessExp && accessExp - Date.now() < 60_000) {
-      return await refresh();
-    }
-    return accessToken;
   };
 
   const logout = () => {
-    localStorage.removeItem(AT_KEY);
-    localStorage.removeItem(RT_KEY);
-    setAccessToken(null);
-    setRefreshToken(null);
-    setAccessExp(null);
+    clearSession();
     setUser(null);
   };
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const at = localStorage.getItem(AT_KEY);
-        if (at) await fetchMe(at);
-      } catch {
-        logout();
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
-
-  const value = useMemo<AuthContextType>(
-    () => ({ user, loading, isAuthenticated: !!user, login, logout, getAccessToken }),
-    [user, loading]
-  );
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  const value = useMemo(() => ({ user, loading, login, logout }), [user, loading]);
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 };
 
-export const useAuth = () => {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth debe usarse dentro de <AuthProvider>");
-  return ctx;
-};
+export const useAuth = () => useContext(Ctx);
 
 
 ---
@@ -4877,14 +4919,17 @@ export default function Navbar() {
 ---
 web\src\components\ProtectedRoute.tsx
 
-// web/src/components/ProtectedRoute.tsx
-import { Navigate, useLocation } from "react-router-dom";
-import { isLoggedIn } from "../api";
+// web/src/routes/ProtectedRoute.tsx
+import React from "react";
+import { Navigate, Outlet, useLocation } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 
-export default function ProtectedRoute({ children }: { children: JSX.Element }) {
+export default function ProtectedRoute() {
+  const { user, loading } = useAuth();
   const loc = useLocation();
-  if (!isLoggedIn()) return <Navigate to="/login" replace state={{ from: loc }} />;
-  return children;
+  if (loading) return <div style={{padding:16}}>Cargando…</div>;
+  if (!user) return <Navigate to="/login" replace state={{ from: loc }} />;
+  return <Outlet />;
 }
 
 
@@ -5086,42 +5131,46 @@ export default function Home() {
 web\src\pages\Login.tsx
 
 // web/src/pages/Login.tsx
-import { useState } from "react";
+import React, { useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
-import { login } from "../api";
 
-export default function LoginPage() {
-  const [email, setEmail] = useState("admin@miempresa.com");
-  const [password, setPassword] = useState("admin123");
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+export default function Login() {
+  const { login } = useAuth();
   const nav = useNavigate();
   const loc = useLocation() as any;
+  const [email, setEmail] = useState("admin@miempresa.com");
+  const [password, setPassword] = useState("admin123");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  async function onSubmit(e: React.FormEvent) {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErr(null); setLoading(true);
+    setBusy(true); setError(null);
     try {
       await login(email, password);
-      const to = loc?.state?.from?.pathname || "/projects";
-      nav(to, { replace: true });
-    } catch (e: any) {
-      setErr(e?.message || "Error de autenticación");
+      nav(loc?.state?.from?.pathname || "/projects", { replace: true });
+    } catch (err: any) {
+      setError("Credenciales inválidas");
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
-  }
+  };
 
   return (
-    <div style={{ maxWidth: 420, margin: "80px auto", display: "grid", gap: 12 }}>
-      <h2>Ingresar</h2>
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 8 }}>
-        <input placeholder="Email" value={email} onChange={(e)=>setEmail(e.target.value)} />
-        <input placeholder="Password" type="password" value={password} onChange={(e)=>setPassword(e.target.value)} />
-        <button disabled={loading} type="submit">{loading ? "Ingresando…" : "Entrar"}</button>
-        {err && <small style={{ color: "crimson" }}>{err}</small>}
+    <div style={{maxWidth:360, margin:"64px auto", padding:24, border:"1px solid #eee", borderRadius:12}}>
+      <h2 style={{marginBottom:8}}>Iniciar sesión</h2>
+      <form onSubmit={onSubmit}>
+        <label>Email</label>
+        <input value={email} onChange={e=>setEmail(e.target.value)} type="email" required style={{width:"100%", padding:8, marginBottom:12}}/>
+        <label>Password</label>
+        <input value={password} onChange={e=>setPassword(e.target.value)} type="password" required style={{width:"100%", padding:8, marginBottom:12}}/>
+        <button disabled={busy} style={{width:"100%", padding:10}}>{busy? "Ingresando..." : "Ingresar"}</button>
+        {error && <p style={{color:"tomato"}}>{error}</p>}
       </form>
-      <small>Tip: usá las cuentas seed del README.</small>
+      <p style={{fontSize:12, opacity:.7, marginTop:12}}>
+        Demo: admin@miempresa.com / admin123
+      </p>
     </div>
   );
 }
@@ -5234,157 +5283,131 @@ export default function NotFoundPage() {
 web\src\pages\ProjectDetail.tsx
 
 // web/src/pages/ProjectDetail.tsx
-import { useEffect, useMemo, useState } from "react";
-import { useParams, Link } from "react-router-dom";
-import {
-  fetchTasks,
-  createTask,
-  patchTask,
-  fetchEstadoReport,
-  type Task,
-} from "../api";
+import React, { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+import { api } from "../api/client";
 
-// Estados sugeridos. Podés ajustar esta lista en un solo lugar.
-const TASK_STATES = ["PENDIENTE", "EN_PROGRESO", "BLOQUEADA", "HECHA", "CANCELADA"] as const;
+type Proyecto = { id:number; nombre:string; estado:string; codigo?:string; prioridad:number; };
+type Tarea = { id:number; titulo:string; estado:string; prioridad:number; uuid:string; proyecto_id:number; };
+type Member = { id:number; email:string; nombre?:string; apellido?:string; rol_en_proyecto:string; };
+type SumItem = { proyecto_id:number; proyecto:string; estado:string; cantidad:number; };
 
-export default function ProjectDetailPage() {
+const ESTADOS = ["PENDIENTE","EN_PROGRESO","BLOQUEADA","HECHA"];
+
+export default function ProjectDetail() {
   const { id } = useParams();
-  const projectId = Number(id);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const pid = Number(id);
+  const [proy, setProy] = useState<Proyecto | null>(null);
+  const [tasks, setTasks] = useState<Tarea[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [resumen, setResumen] = useState<SumItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  const [titulo, setTitulo] = useState("");
-  const [report, setReport] = useState<{ estado: string; cantidad: number }[]>([]);
-  const [savingTaskId, setSavingTaskId] = useState<number | null>(null);
 
-  async function reloadReport() {
-    const r = await fetchEstadoReport(projectId);
-    setReport(r.map((x) => ({ estado: x.estado, cantidad: x.cantidad })));
-  }
-
-  async function load() {
+  const load = async () => {
     setLoading(true);
-    setErr(null);
-    try {
-      const [t, _] = await Promise.all([fetchTasks(projectId), reloadReport()]);
-      setTasks(t);
-    } catch (e: any) {
-      setErr(e?.message || "Error");
-    } finally {
-      setLoading(false);
-    }
-  }
+    const [p, t, m, r] = await Promise.all([
+      api.get<Proyecto>(`/api/projects/${pid}`),
+      api.get<Tarea[]>(`/api/projects/${pid}/tasks`),
+      api.get<Member[]>(`/api/projects/${pid}/members`).catch(()=>[]),
+      api.get<SumItem[]>(`/api/projects/${pid}/report/estado`).catch(()=>[]),
+    ]);
+    setProy(p); setTasks(t); setMembers(m); setResumen(r);
+    setLoading(false);
+  };
+  useEffect(()=>{ load(); }, [pid]);
 
-  useEffect(() => {
-    load();
-  }, [projectId]);
-
-  async function onCreate(e: React.FormEvent) {
+  // crear tarea
+  const [titulo, setTitulo] = useState("");
+  const createTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    const t = titulo.trim();
-    if (!t) return;
-    await createTask({ proyecto_id: projectId, titulo: t, prioridad: 2 });
+    await api.post<Tarea>("/api/projects/tasks", { proyecto_id: pid, titulo, prioridad: 3 });
     setTitulo("");
-    await load(); // refresca tareas + reporte
-  }
+    await load(); // ⟵ refresca
+  };
 
-  async function changeEstado(taskId: number, nuevoEstado: string) {
-    const prev = tasks.find((x) => x.id === taskId)?.estado;
-    if (!prev || prev === nuevoEstado) return;
+  const changeEstado = async (taskId: number, estado: string) => {
+    await api.patch<Tarea>(`/api/projects/tasks/${taskId}`, { estado });
+    await load(); // ⟵ refresca después del cambio de estado
+  };
 
-    setSavingTaskId(taskId);
-    // Optimista: actualizamos UI al toque
-    setTasks((curr) => curr.map((t) => (t.id === taskId ? { ...t, estado: nuevoEstado } : t)));
-
+  // agregar miembro por email (solo Admin en backend)
+  const [email, setEmail] = useState("");
+  const addMember = async (e: React.FormEvent) => {
+    e.preventDefault();
     try {
-      await patchTask(taskId, { estado: nuevoEstado });
-      await reloadReport();
-    } catch (e) {
-      // Revertir si falla
-      setTasks((curr) => curr.map((t) => (t.id === taskId ? { ...t, estado: prev } : t)));
-      alert("No se pudo actualizar el estado de la tarea.");
-    } finally {
-      setSavingTaskId(null);
+      await api.post<Member>(`/api/projects/${pid}/members`, { email });
+      setEmail("");
+      await load();
+    } catch (e:any) {
+      alert("No autorizado o email inexistente");
     }
-  }
+  };
+
+  if (loading) return <div style={{padding:16}}>Cargando…</div>;
+  if (!proy) return <div style={{padding:16}}>Proyecto no encontrado</div>;
 
   return (
-    <div style={{ maxWidth: 900, margin: "24px auto", display: "grid", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <Link to="/projects">← Volver</Link>
-        <h2 style={{ margin: 0 }}>Proyecto #{projectId}</h2>
-      </div>
+    <div style={{maxWidth:1000, margin:"24px auto", padding:"0 16px"}}>
+      <h2>Proyecto #{proy.id} — {proy.nombre}</h2>
+      <p style={{opacity:.7}}>Código: {proy.codigo || "-"} · Estado: {proy.estado}</p>
 
-      <form onSubmit={onCreate} style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 8 }}>
-        <input
-          placeholder="Nueva tarea..."
-          value={titulo}
-          onChange={(e) => setTitulo(e.target.value)}
-        />
-        <button type="submit">Crear tarea</button>
-      </form>
-
-      {loading && <p>Cargando...</p>}
-      {err && <p style={{ color: "crimson" }}>{err}</p>}
-
-      <section>
-        <h3 style={{ marginBottom: 8 }}>Tareas</h3>
-        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6 }}>
-          {tasks.map((t) => {
-            // Aseguramos que el estado actual esté siempre en el listado (por si viene algo distinto)
-            const options = Array.from(new Set([t.estado, ...TASK_STATES]));
-            return (
-              <li
-                key={t.id}
-                style={{
-                  padding: 12,
-                  border: "1px solid #eee",
-                  borderRadius: 8,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 12,
-                }}
-              >
-                <div>
-                  <strong>{t.titulo}</strong>
-                  <br />
-                  <small>Prioridad: {t.prioridad}</small>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <label>
-                    <small>Estado:&nbsp;</small>
-                    <select
-                      value={t.estado}
-                      disabled={savingTaskId === t.id}
-                      onChange={(e) => changeEstado(t.id, e.target.value)}
-                    >
-                      {options.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt}
-                        </option>
-                      ))}
+      <div style={{display:"grid", gap:20, gridTemplateColumns:"1fr"}}>
+        {/* TAREAS */}
+        <section style={{border:"1px solid #eee", borderRadius:12, padding:16}}>
+          <h3 style={{marginTop:0}}>Tareas</h3>
+          <form onSubmit={createTask} style={{display:"flex", gap:8, marginBottom:12}}>
+            <input placeholder="Título de la tarea" value={titulo} onChange={e=>setTitulo(e.target.value)} required />
+            <button type="submit">Agregar</button>
+          </form>
+          <table width="100%" cellPadding={8} style={{borderCollapse:"collapse"}}>
+            <thead><tr style={{background:"#f7f7f7"}}><th align="left">ID</th><th align="left">Título</th><th>Estado</th></tr></thead>
+            <tbody>
+              {tasks.map(t=>(
+                <tr key={t.id} style={{borderTop:"1px solid #eee"}}>
+                  <td>{t.id}</td>
+                  <td>{t.titulo}</td>
+                  <td style={{textAlign:"center"}}>
+                    <select value={t.estado} onChange={(e)=>changeEstado(t.id, e.target.value)}>
+                      {ESTADOS.map(s=><option key={s} value={s}>{s}</option>)}
                     </select>
-                  </label>
-                  {savingTaskId === t.id && <small style={{ opacity: 0.7 }}>Guardando…</small>}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      </section>
+                  </td>
+                </tr>
+              ))}
+              {!tasks.length && <tr><td colSpan={3} style={{padding:12, opacity:.7}}>Sin tareas</td></tr>}
+            </tbody>
+          </table>
+        </section>
 
-      <section>
-        <h3 style={{ marginBottom: 8 }}>Reporte por estado</h3>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {report.map((r) => (
-            <div key={r.estado} style={{ border: "1px solid #eee", borderRadius: 8, padding: "8px 12px" }}>
-              <strong>{r.estado}</strong>: {r.cantidad}
-            </div>
-          ))}
-          {!report.length && <small>No hay datos</small>}
-        </div>
-      </section>
+        {/* MIEMBROS */}
+        <section style={{border:"1px solid #eee", borderRadius:12, padding:16}}>
+          <h3 style={{marginTop:0}}>Miembros</h3>
+          <form onSubmit={addMember} style={{display:"flex", gap:8, marginBottom:12}}>
+            <input type="email" placeholder="email@miempresa.com" value={email} onChange={e=>setEmail(e.target.value)} />
+            <button type="submit">Agregar</button>
+          </form>
+          <ul style={{margin:0, paddingLeft:20}}>
+            {members.map(m=>(
+              <li key={m.id}>{m.email} {m.nombre ? `— ${m.nombre} ${m.apellido}` : ""} <span style={{opacity:.6}}>({m.rol_en_proyecto})</span></li>
+            ))}
+            {!members.length && <li style={{opacity:.7}}>Sin miembros</li>}
+          </ul>
+        </section>
+
+        {/* REPORTE */}
+        <section style={{border:"1px solid #eee", borderRadius:12, padding:16}}>
+          <h3 style={{marginTop:0}}>Reporte por estado</h3>
+          {resumen.length ? (
+            <table cellPadding={8}>
+              <thead><tr><th align="left">Estado</th><th>Cantidad</th></tr></thead>
+              <tbody>
+                {resumen.map(r=>(
+                  <tr key={r.estado}><td>{r.estado}</td><td style={{textAlign:"center"}}>{r.cantidad}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p style={{opacity:.7}}>Sin datos</p>}
+        </section>
+      </div>
     </div>
   );
 }
@@ -5548,77 +5571,76 @@ export default function ProjectDetailsPage() {
 web\src\pages\Projects.tsx
 
 // web/src/pages/Projects.tsx
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { createProject, fetchProjects, logout, type Project } from "../api";
+import React, { useEffect, useState } from "react";
+import { api } from "../api/client";
+import { Link } from "react-router-dom";
 
-export default function ProjectsPage() {
-  const [items, setItems] = useState<Project[]>([]);
+type Proyecto = { id:number; codigo?:string; nombre:string; estado:string; prioridad:number; };
+
+export default function Projects() {
+  const [items, setItems] = useState<Proyecto[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [codigo, setCodigo] = useState("");
   const [nombre, setNombre] = useState("");
-  const [creating, setCreating] = useState(false);
-  const nav = useNavigate();
+  const [codigo, setCodigo] = useState("");
 
-  async function load() {
+  const load = async () => {
     setLoading(true); setErr(null);
     try {
-      const data = await fetchProjects();
+      const data = await api.get<Proyecto[]>("/api/projects");
       setItems(data);
-    } catch (e: any) {
-      setErr(e?.message || "Error");
+    } catch (e:any) {
+      setErr(e.message);
     } finally {
       setLoading(false);
     }
-  }
-  useEffect(()=>{ load(); }, []);
+  };
 
-  async function onCreate(e: React.FormEvent) {
+  useEffect(() => { load(); }, []);
+
+  const create = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nombre.trim()) return;
-    setCreating(true);
-    try {
-      const p = await createProject({ codigo: codigo || undefined, nombre: nombre.trim(), prioridad: 2 });
-      setCodigo(""); setNombre("");
-      await load();                // ← refresca lista
-      nav(`/projects/${p.id}`);    // opcional: ir al detalle del recién creado
-    } catch (e:any) {
-      alert(e?.message || "No se pudo crear el proyecto");
-    } finally {
-      setCreating(false);
-    }
-  }
+    await api.post<Proyecto>("/api/projects", { nombre, codigo: codigo || undefined, prioridad: 3 });
+    setNombre(""); setCodigo("");
+    await load(); // ⟵ refresca después de crear
+  };
 
   return (
-    <div style={{ maxWidth: 900, margin: "24px auto", display: "grid", gap: 16 }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h2 style={{ margin: 0 }}>Proyectos</h2>
-        <button onClick={()=>{ logout(); nav("/login", { replace: true }); }}>Salir</button>
-      </header>
+    <div style={{maxWidth:900, margin:"24px auto", padding:"0 16px"}}>
+      <h2>Proyectos</h2>
 
-      <form onSubmit={onCreate} style={{ display: "grid", gridTemplateColumns: "160px 1fr 120px", gap: 8 }}>
-        <input placeholder="Código (opcional)" value={codigo} onChange={(e)=>setCodigo(e.target.value)} />
-        <input placeholder="Nombre del proyecto" value={nombre} onChange={(e)=>setNombre(e.target.value)} />
-        <button disabled={creating} type="submit">{creating? "Creando…" : "Crear"}</button>
+      <form onSubmit={create} style={{display:"flex", gap:8, margin:"12px 0 20px"}}>
+        <input placeholder="Código (opcional)" value={codigo} onChange={e=>setCodigo(e.target.value)} />
+        <input placeholder="Nombre" value={nombre} onChange={e=>setNombre(e.target.value)} required />
+        <button type="submit">Crear</button>
       </form>
 
       {loading && <p>Cargando…</p>}
-      {err && <p style={{ color: "crimson" }}>{err}</p>}
+      {err && <p style={{color:"tomato"}}>{err}</p>}
 
-      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 8 }}>
-        {items.map(p => (
-          <li key={p.id} style={{ border: "1px solid #eee", borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between" }}>
-            <div>
-              <strong>{p.codigo ? `${p.codigo} — ` : ""}{p.nombre}</strong><br/>
-              <small>Estado: {p.estado} · Prioridad: {p.prioridad}</small>
-            </div>
-            <Link to={`/projects/${p.id}`}>Ver</Link>
-          </li>
-        ))}
-      </ul>
-
-      {!loading && !items.length && <small>No hay proyectos todavía.</small>}
+      {!loading && !err && (
+        <table width="100%" cellPadding={8} style={{borderCollapse:"collapse"}}>
+          <thead>
+            <tr style={{background:"#f7f7f7"}}>
+              <th align="left">ID</th><th align="left">Código</th><th align="left">Nombre</th><th>Estado</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(p=>(
+              <tr key={p.id} style={{borderTop:"1px solid #eee"}}>
+                <td>{p.id}</td>
+                <td>{p.codigo || "-"}</td>
+                <td>{p.nombre}</td>
+                <td style={{textAlign:"center"}}>{p.estado}</td>
+                <td style={{textAlign:"right"}}>
+                  <Link to={`/projects/${p.id}`}>Abrir</Link>
+                </td>
+              </tr>
+            ))}
+            {!items.length && <tr><td colSpan={5} style={{padding:16, opacity:.7}}>Sin proyectos</td></tr>}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

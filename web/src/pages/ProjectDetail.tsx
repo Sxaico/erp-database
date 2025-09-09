@@ -1,155 +1,129 @@
 // web/src/pages/ProjectDetail.tsx
-import { useEffect, useMemo, useState } from "react";
-import { useParams, Link } from "react-router-dom";
-import {
-  fetchTasks,
-  createTask,
-  patchTask,
-  fetchEstadoReport,
-  type Task,
-} from "../api";
+import React, { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+import { api } from "../api/client";
 
-// Estados sugeridos. Podés ajustar esta lista en un solo lugar.
-const TASK_STATES = ["PENDIENTE", "EN_PROGRESO", "BLOQUEADA", "HECHA", "CANCELADA"] as const;
+type Proyecto = { id:number; nombre:string; estado:string; codigo?:string; prioridad:number; };
+type Tarea = { id:number; titulo:string; estado:string; prioridad:number; uuid:string; proyecto_id:number; };
+type Member = { id:number; email:string; nombre?:string; apellido?:string; rol_en_proyecto:string; };
+type SumItem = { proyecto_id:number; proyecto:string; estado:string; cantidad:number; };
 
-export default function ProjectDetailPage() {
+const ESTADOS = ["PENDIENTE","EN_PROGRESO","BLOQUEADA","HECHA"];
+
+export default function ProjectDetail() {
   const { id } = useParams();
-  const projectId = Number(id);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const pid = Number(id);
+  const [proy, setProy] = useState<Proyecto | null>(null);
+  const [tasks, setTasks] = useState<Tarea[]>([]);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [resumen, setResumen] = useState<SumItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  const [titulo, setTitulo] = useState("");
-  const [report, setReport] = useState<{ estado: string; cantidad: number }[]>([]);
-  const [savingTaskId, setSavingTaskId] = useState<number | null>(null);
 
-  async function reloadReport() {
-    const r = await fetchEstadoReport(projectId);
-    setReport(r.map((x) => ({ estado: x.estado, cantidad: x.cantidad })));
-  }
-
-  async function load() {
+  const load = async () => {
     setLoading(true);
-    setErr(null);
-    try {
-      const [t, _] = await Promise.all([fetchTasks(projectId), reloadReport()]);
-      setTasks(t);
-    } catch (e: any) {
-      setErr(e?.message || "Error");
-    } finally {
-      setLoading(false);
-    }
-  }
+    const [p, t, m, r] = await Promise.all([
+      api.get<Proyecto>(`/api/projects/${pid}`),
+      api.get<Tarea[]>(`/api/projects/${pid}/tasks`),
+      api.get<Member[]>(`/api/projects/${pid}/members`).catch(()=>[]),
+      api.get<SumItem[]>(`/api/projects/${pid}/report/estado`).catch(()=>[]),
+    ]);
+    setProy(p); setTasks(t); setMembers(m); setResumen(r);
+    setLoading(false);
+  };
+  useEffect(()=>{ load(); }, [pid]);
 
-  useEffect(() => {
-    load();
-  }, [projectId]);
-
-  async function onCreate(e: React.FormEvent) {
+  // crear tarea
+  const [titulo, setTitulo] = useState("");
+  const createTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    const t = titulo.trim();
-    if (!t) return;
-    await createTask({ proyecto_id: projectId, titulo: t, prioridad: 2 });
+    await api.post<Tarea>("/api/projects/tasks", { proyecto_id: pid, titulo, prioridad: 3 });
     setTitulo("");
-    await load(); // refresca tareas + reporte
-  }
+    await load(); // ⟵ refresca
+  };
 
-  async function changeEstado(taskId: number, nuevoEstado: string) {
-    const prev = tasks.find((x) => x.id === taskId)?.estado;
-    if (!prev || prev === nuevoEstado) return;
+  const changeEstado = async (taskId: number, estado: string) => {
+    await api.patch<Tarea>(`/api/projects/tasks/${taskId}`, { estado });
+    await load(); // ⟵ refresca después del cambio de estado
+  };
 
-    setSavingTaskId(taskId);
-    // Optimista: actualizamos UI al toque
-    setTasks((curr) => curr.map((t) => (t.id === taskId ? { ...t, estado: nuevoEstado } : t)));
-
+  // agregar miembro por email (solo Admin en backend)
+  const [email, setEmail] = useState("");
+  const addMember = async (e: React.FormEvent) => {
+    e.preventDefault();
     try {
-      await patchTask(taskId, { estado: nuevoEstado });
-      await reloadReport();
-    } catch (e) {
-      // Revertir si falla
-      setTasks((curr) => curr.map((t) => (t.id === taskId ? { ...t, estado: prev } : t)));
-      alert("No se pudo actualizar el estado de la tarea.");
-    } finally {
-      setSavingTaskId(null);
+      await api.post<Member>(`/api/projects/${pid}/members`, { email });
+      setEmail("");
+      await load();
+    } catch (e:any) {
+      alert("No autorizado o email inexistente");
     }
-  }
+  };
+
+  if (loading) return <div style={{padding:16}}>Cargando…</div>;
+  if (!proy) return <div style={{padding:16}}>Proyecto no encontrado</div>;
 
   return (
-    <div style={{ maxWidth: 900, margin: "24px auto", display: "grid", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <Link to="/projects">← Volver</Link>
-        <h2 style={{ margin: 0 }}>Proyecto #{projectId}</h2>
-      </div>
+    <div style={{maxWidth:1000, margin:"24px auto", padding:"0 16px"}}>
+      <h2>Proyecto #{proy.id} — {proy.nombre}</h2>
+      <p style={{opacity:.7}}>Código: {proy.codigo || "-"} · Estado: {proy.estado}</p>
 
-      <form onSubmit={onCreate} style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 8 }}>
-        <input
-          placeholder="Nueva tarea..."
-          value={titulo}
-          onChange={(e) => setTitulo(e.target.value)}
-        />
-        <button type="submit">Crear tarea</button>
-      </form>
-
-      {loading && <p>Cargando...</p>}
-      {err && <p style={{ color: "crimson" }}>{err}</p>}
-
-      <section>
-        <h3 style={{ marginBottom: 8 }}>Tareas</h3>
-        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6 }}>
-          {tasks.map((t) => {
-            // Aseguramos que el estado actual esté siempre en el listado (por si viene algo distinto)
-            const options = Array.from(new Set([t.estado, ...TASK_STATES]));
-            return (
-              <li
-                key={t.id}
-                style={{
-                  padding: 12,
-                  border: "1px solid #eee",
-                  borderRadius: 8,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 12,
-                }}
-              >
-                <div>
-                  <strong>{t.titulo}</strong>
-                  <br />
-                  <small>Prioridad: {t.prioridad}</small>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <label>
-                    <small>Estado:&nbsp;</small>
-                    <select
-                      value={t.estado}
-                      disabled={savingTaskId === t.id}
-                      onChange={(e) => changeEstado(t.id, e.target.value)}
-                    >
-                      {options.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt}
-                        </option>
-                      ))}
+      <div style={{display:"grid", gap:20, gridTemplateColumns:"1fr"}}>
+        {/* TAREAS */}
+        <section style={{border:"1px solid #eee", borderRadius:12, padding:16}}>
+          <h3 style={{marginTop:0}}>Tareas</h3>
+          <form onSubmit={createTask} style={{display:"flex", gap:8, marginBottom:12}}>
+            <input placeholder="Título de la tarea" value={titulo} onChange={e=>setTitulo(e.target.value)} required />
+            <button type="submit">Agregar</button>
+          </form>
+          <table width="100%" cellPadding={8} style={{borderCollapse:"collapse"}}>
+            <thead><tr style={{background:"#f7f7f7"}}><th align="left">ID</th><th align="left">Título</th><th>Estado</th></tr></thead>
+            <tbody>
+              {tasks.map(t=>(
+                <tr key={t.id} style={{borderTop:"1px solid #eee"}}>
+                  <td>{t.id}</td>
+                  <td>{t.titulo}</td>
+                  <td style={{textAlign:"center"}}>
+                    <select value={t.estado} onChange={(e)=>changeEstado(t.id, e.target.value)}>
+                      {ESTADOS.map(s=><option key={s} value={s}>{s}</option>)}
                     </select>
-                  </label>
-                  {savingTaskId === t.id && <small style={{ opacity: 0.7 }}>Guardando…</small>}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      </section>
+                  </td>
+                </tr>
+              ))}
+              {!tasks.length && <tr><td colSpan={3} style={{padding:12, opacity:.7}}>Sin tareas</td></tr>}
+            </tbody>
+          </table>
+        </section>
 
-      <section>
-        <h3 style={{ marginBottom: 8 }}>Reporte por estado</h3>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {report.map((r) => (
-            <div key={r.estado} style={{ border: "1px solid #eee", borderRadius: 8, padding: "8px 12px" }}>
-              <strong>{r.estado}</strong>: {r.cantidad}
-            </div>
-          ))}
-          {!report.length && <small>No hay datos</small>}
-        </div>
-      </section>
+        {/* MIEMBROS */}
+        <section style={{border:"1px solid #eee", borderRadius:12, padding:16}}>
+          <h3 style={{marginTop:0}}>Miembros</h3>
+          <form onSubmit={addMember} style={{display:"flex", gap:8, marginBottom:12}}>
+            <input type="email" placeholder="email@miempresa.com" value={email} onChange={e=>setEmail(e.target.value)} />
+            <button type="submit">Agregar</button>
+          </form>
+          <ul style={{margin:0, paddingLeft:20}}>
+            {members.map(m=>(
+              <li key={m.id}>{m.email} {m.nombre ? `— ${m.nombre} ${m.apellido}` : ""} <span style={{opacity:.6}}>({m.rol_en_proyecto})</span></li>
+            ))}
+            {!members.length && <li style={{opacity:.7}}>Sin miembros</li>}
+          </ul>
+        </section>
+
+        {/* REPORTE */}
+        <section style={{border:"1px solid #eee", borderRadius:12, padding:16}}>
+          <h3 style={{marginTop:0}}>Reporte por estado</h3>
+          {resumen.length ? (
+            <table cellPadding={8}>
+              <thead><tr><th align="left">Estado</th><th>Cantidad</th></tr></thead>
+              <tbody>
+                {resumen.map(r=>(
+                  <tr key={r.estado}><td>{r.estado}</td><td style={{textAlign:"center"}}>{r.cantidad}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p style={{opacity:.7}}>Sin datos</p>}
+        </section>
+      </div>
     </div>
   );
 }

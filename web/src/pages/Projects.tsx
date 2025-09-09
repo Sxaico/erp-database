@@ -1,75 +1,74 @@
 // web/src/pages/Projects.tsx
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { createProject, fetchProjects, logout, type Project } from "../api";
+import React, { useEffect, useState } from "react";
+import { api } from "../api/client";
+import { Link } from "react-router-dom";
 
-export default function ProjectsPage() {
-  const [items, setItems] = useState<Project[]>([]);
+type Proyecto = { id:number; codigo?:string; nombre:string; estado:string; prioridad:number; };
+
+export default function Projects() {
+  const [items, setItems] = useState<Proyecto[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [codigo, setCodigo] = useState("");
   const [nombre, setNombre] = useState("");
-  const [creating, setCreating] = useState(false);
-  const nav = useNavigate();
+  const [codigo, setCodigo] = useState("");
 
-  async function load() {
+  const load = async () => {
     setLoading(true); setErr(null);
     try {
-      const data = await fetchProjects();
+      const data = await api.get<Proyecto[]>("/api/projects");
       setItems(data);
-    } catch (e: any) {
-      setErr(e?.message || "Error");
+    } catch (e:any) {
+      setErr(e.message);
     } finally {
       setLoading(false);
     }
-  }
-  useEffect(()=>{ load(); }, []);
+  };
 
-  async function onCreate(e: React.FormEvent) {
+  useEffect(() => { load(); }, []);
+
+  const create = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nombre.trim()) return;
-    setCreating(true);
-    try {
-      const p = await createProject({ codigo: codigo || undefined, nombre: nombre.trim(), prioridad: 2 });
-      setCodigo(""); setNombre("");
-      await load();                // ← refresca lista
-      nav(`/projects/${p.id}`);    // opcional: ir al detalle del recién creado
-    } catch (e:any) {
-      alert(e?.message || "No se pudo crear el proyecto");
-    } finally {
-      setCreating(false);
-    }
-  }
+    await api.post<Proyecto>("/api/projects", { nombre, codigo: codigo || undefined, prioridad: 3 });
+    setNombre(""); setCodigo("");
+    await load(); // ⟵ refresca después de crear
+  };
 
   return (
-    <div style={{ maxWidth: 900, margin: "24px auto", display: "grid", gap: 16 }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h2 style={{ margin: 0 }}>Proyectos</h2>
-        <button onClick={()=>{ logout(); nav("/login", { replace: true }); }}>Salir</button>
-      </header>
+    <div style={{maxWidth:900, margin:"24px auto", padding:"0 16px"}}>
+      <h2>Proyectos</h2>
 
-      <form onSubmit={onCreate} style={{ display: "grid", gridTemplateColumns: "160px 1fr 120px", gap: 8 }}>
-        <input placeholder="Código (opcional)" value={codigo} onChange={(e)=>setCodigo(e.target.value)} />
-        <input placeholder="Nombre del proyecto" value={nombre} onChange={(e)=>setNombre(e.target.value)} />
-        <button disabled={creating} type="submit">{creating? "Creando…" : "Crear"}</button>
+      <form onSubmit={create} style={{display:"flex", gap:8, margin:"12px 0 20px"}}>
+        <input placeholder="Código (opcional)" value={codigo} onChange={e=>setCodigo(e.target.value)} />
+        <input placeholder="Nombre" value={nombre} onChange={e=>setNombre(e.target.value)} required />
+        <button type="submit">Crear</button>
       </form>
 
       {loading && <p>Cargando…</p>}
-      {err && <p style={{ color: "crimson" }}>{err}</p>}
+      {err && <p style={{color:"tomato"}}>{err}</p>}
 
-      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 8 }}>
-        {items.map(p => (
-          <li key={p.id} style={{ border: "1px solid #eee", borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between" }}>
-            <div>
-              <strong>{p.codigo ? `${p.codigo} — ` : ""}{p.nombre}</strong><br/>
-              <small>Estado: {p.estado} · Prioridad: {p.prioridad}</small>
-            </div>
-            <Link to={`/projects/${p.id}`}>Ver</Link>
-          </li>
-        ))}
-      </ul>
-
-      {!loading && !items.length && <small>No hay proyectos todavía.</small>}
+      {!loading && !err && (
+        <table width="100%" cellPadding={8} style={{borderCollapse:"collapse"}}>
+          <thead>
+            <tr style={{background:"#f7f7f7"}}>
+              <th align="left">ID</th><th align="left">Código</th><th align="left">Nombre</th><th>Estado</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(p=>(
+              <tr key={p.id} style={{borderTop:"1px solid #eee"}}>
+                <td>{p.id}</td>
+                <td>{p.codigo || "-"}</td>
+                <td>{p.nombre}</td>
+                <td style={{textAlign:"center"}}>{p.estado}</td>
+                <td style={{textAlign:"right"}}>
+                  <Link to={`/projects/${p.id}`}>Abrir</Link>
+                </td>
+              </tr>
+            ))}
+            {!items.length && <tr><td colSpan={5} style={{padding:16, opacity:.7}}>Sin proyectos</td></tr>}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

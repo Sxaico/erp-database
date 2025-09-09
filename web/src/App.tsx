@@ -1,24 +1,29 @@
 // web/src/App.tsx
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import ProtectedRoute from "./components/ProtectedRoute";
-import LoginPage from "./pages/Login";
-import ProjectsPage from "./pages/Projects";
-import ProjectDetailPage from "./pages/ProjectDetail";
+import React from "react";
+import { Link, Outlet } from "react-router-dom";
+import { useAuth } from "./auth/AuthContext";
 
 export default function App() {
+  const { user, logout } = useAuth();
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Navigate to="/projects" replace />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/projects" element={
-          <ProtectedRoute><ProjectsPage /></ProtectedRoute>
-        } />
-        <Route path="/projects/:id" element={
-          <ProtectedRoute><ProjectDetailPage /></ProtectedRoute>
-        } />
-        <Route path="*" element={<Navigate to="/projects" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <div>
+      <header style={{display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 16px", borderBottom:"1px solid #eee"}}>
+        <div style={{display:"flex", gap:12, alignItems:"center"}}>
+          <strong>ERP MVP</strong>
+          <Link to="/projects">Proyectos</Link>
+        </div>
+        <div>
+          {user ? (
+            <>
+              <span style={{marginRight:12, opacity:.8}}>
+                {user.nombre} {user.apellido}
+              </span>
+              <button onClick={logout}>Salir</button>
+            </>
+          ) : <Link to="/login">Ingresar</Link>}
+        </div>
+      </header>
+      <Outlet />
+    </div>
   );
 }

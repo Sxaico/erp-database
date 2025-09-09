@@ -1,40 +1,44 @@
 // web/src/pages/Login.tsx
-import { useState } from "react";
+import React, { useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
-import { login } from "../api";
 
-export default function LoginPage() {
-  const [email, setEmail] = useState("admin@miempresa.com");
-  const [password, setPassword] = useState("admin123");
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+export default function Login() {
+  const { login } = useAuth();
   const nav = useNavigate();
   const loc = useLocation() as any;
+  const [email, setEmail] = useState("admin@miempresa.com");
+  const [password, setPassword] = useState("admin123");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  async function onSubmit(e: React.FormEvent) {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setErr(null); setLoading(true);
+    setBusy(true); setError(null);
     try {
       await login(email, password);
-      const to = loc?.state?.from?.pathname || "/projects";
-      nav(to, { replace: true });
-    } catch (e: any) {
-      setErr(e?.message || "Error de autenticación");
+      nav(loc?.state?.from?.pathname || "/projects", { replace: true });
+    } catch (err: any) {
+      setError("Credenciales inválidas");
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
-  }
+  };
 
   return (
-    <div style={{ maxWidth: 420, margin: "80px auto", display: "grid", gap: 12 }}>
-      <h2>Ingresar</h2>
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 8 }}>
-        <input placeholder="Email" value={email} onChange={(e)=>setEmail(e.target.value)} />
-        <input placeholder="Password" type="password" value={password} onChange={(e)=>setPassword(e.target.value)} />
-        <button disabled={loading} type="submit">{loading ? "Ingresando…" : "Entrar"}</button>
-        {err && <small style={{ color: "crimson" }}>{err}</small>}
+    <div style={{maxWidth:360, margin:"64px auto", padding:24, border:"1px solid #eee", borderRadius:12}}>
+      <h2 style={{marginBottom:8}}>Iniciar sesión</h2>
+      <form onSubmit={onSubmit}>
+        <label>Email</label>
+        <input value={email} onChange={e=>setEmail(e.target.value)} type="email" required style={{width:"100%", padding:8, marginBottom:12}}/>
+        <label>Password</label>
+        <input value={password} onChange={e=>setPassword(e.target.value)} type="password" required style={{width:"100%", padding:8, marginBottom:12}}/>
+        <button disabled={busy} style={{width:"100%", padding:10}}>{busy? "Ingresando..." : "Ingresar"}</button>
+        {error && <p style={{color:"tomato"}}>{error}</p>}
       </form>
-      <small>Tip: usá las cuentas seed del README.</small>
+      <p style={{fontSize:12, opacity:.7, marginTop:12}}>
+        Demo: admin@miempresa.com / admin123
+      </p>
     </div>
   );
 }
