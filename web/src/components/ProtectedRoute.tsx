@@ -1,14 +1,9 @@
 // web/src/components/ProtectedRoute.tsx
-import { Navigate, Outlet, useLocation } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
+import { Navigate, useLocation } from "react-router-dom";
+import { isLoggedIn } from "../api";
 
-export default function ProtectedRoute() {
-  const { isAuthenticated, loading } = useAuth();
-  const location = useLocation();
-
-  if (loading) return null; // o un spinner suave
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace state={{ from: location }} />;
-  }
-  return <Outlet />;
+export default function ProtectedRoute({ children }: { children: JSX.Element }) {
+  const loc = useLocation();
+  if (!isLoggedIn()) return <Navigate to="/login" replace state={{ from: loc }} />;
+  return children;
 }

@@ -325,109 +325,6 @@ MIT (o la que prefieras).
 
 
 ---
-script-copiar-todo.txt
-
-# --- Configuración ---
-# Nombre del archivo de salida que se creará en el directorio raíz.
-$outputFile = "output.txt"
-
-# Lista de directorios que se ignorarán por completo.
-$excludedDirs = @(
-    'pgdata',
-    'node_modules',
-    '__pycache__',
-    '.vite',
-    '.git',      # Se añade .git por si es un repositorio.
-    'dist',      # Se añade dist por si hay builds.
-    'build'
-)
-
-# Lista de extensiones de archivo que se ignorarán.
-$excludedExtensions = @(
-    '.log',
-    '.lock',
-    '.svg',
-    '.png',
-    '.jpg',
-    '.jpeg',
-    '.gif',
-    '.ico'
-)
-
-
-# --- Comienzo del Script ---
-
-# Limpiar el archivo de salida si ya existe.
-if (Test-Path $outputFile) {
-    Clear-Content $outputFile
-}
-
-Write-Host "Generando listado de archivos en '$outputFile'..."
-
-# Obtener la ruta completa del directorio actual para crear rutas relativas.
-$rootPath = (Get-Location).Path
-if (-not $rootPath.EndsWith('\')) {
-    $rootPath += '\'
-}
-$rootPathLength = $rootPath.Length
-
-# Obtener todos los archivos de forma recursiva.
-Get-ChildItem -Path . -Recurse -File | ForEach-Object {
-    $file = $_
-    $shouldExclude = $false
-
-    # 1. Comprobar si el archivo está en un directorio excluido.
-    foreach ($dir in $excludedDirs) {
-        if ($file.FullName -like "*\$dir\*") {
-            $shouldExclude = $true
-            break
-        }
-    }
-
-    # 2. Comprobar si la extensión del archivo está excluida (si no fue ya excluido por directorio).
-    if (-not $shouldExclude) {
-        if ($excludedExtensions -contains $file.Extension) {
-            $shouldExclude = $true
-        }
-    }
-
-    # 3. Excluir el propio archivo de salida.
-    if ($file.Name -eq $outputFile) {
-        $shouldExclude = $true
-    }
-
-    # Si el archivo no debe ser excluido, procesarlo.
-    if (-not $shouldExclude) {
-        # Obtener la ruta relativa del archivo.
-        $relativePath = $file.FullName.Substring($rootPathLength)
-
-        Write-Host "Procesando: $relativePath"
-
-        # Leer el contenido del archivo. Se añade un try-catch por si es un archivo binario.
-        $content = ""
-        try {
-            $content = Get-Content -Path $file.FullName -Raw -ErrorAction Stop
-        } catch {
-            $content = "### ERROR: No se pudo leer el contenido del archivo (posiblemente binario). ###"
-        }
-
-        # Crear el bloque de texto con el formato solicitado.
-        $outputBlock = @"
-$relativePath
-
-$content
-
----
-"@
-
-        # Añadir el bloque al archivo de salida.
-        Add-Content -Path $outputFile -Value $outputBlock
-    }
-}
-
-Write-Host "¡Proceso completado! El archivo '$outputFile' ha sido creado con éxito."
-
----
 api\.env
 
 # api/.env
@@ -472,36 +369,6 @@ COPY app ./app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host","0.0.0.0","--port","8000","--reload"]
 
-
----
-api\requirements.txt
-
-# FastAPI y servidor
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-
-# Base de datos
-sqlalchemy==2.0.23
-asyncpg==0.29.0
-psycopg2-binary==2.9.9
-
-# Autenticación y seguridad  
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-multipart==0.0.6
-
-# Validación y serialización
-pydantic==2.5.0
-pydantic-settings==2.1.0
-
-# Utilidades
-python-dotenv==1.0.0
-email-validator==2.1.0
-
-# Desarrollo y testing
-pytest==7.4.3
-pytest-asyncio==0.21.1
-httpx==0.25.2
 
 ---
 api\app\__init__.py
@@ -4472,142 +4339,160 @@ export default defineConfig({
 ---
 web\src\api.ts
 
-// src/api.ts
-export interface Role { id: number; nombre: string; }
-export interface User {
+// web/src/api.ts
+export type User = {
   id: number; email: string; nombre: string; apellido: string;
-  roles: Role[]; activo: boolean;
-}
-export interface Tokens { access_token: string; refresh_token?: string; token_type?: string; expires_in?: number; }
-export interface Project {
-  id: number; uuid: string; codigo: string | null; nombre: string;
-  estado: string; prioridad: number; avance_pct: number; presupuesto_monto: number;
-}
-export interface HealthResponse { status: string; db: string; version: string; }
-
-const API_BASE =
-  (import.meta as any).env?.VITE_API_URL ||
-  window.location.origin.replace(':5173', ':8000');
-
-const AT_KEY = 'erp.at';
-const RT_KEY = 'erp.rt';
-
-export const tokenStore = {
-  get access() { return localStorage.getItem(AT_KEY) || ''; },
-  set access(v: string) { localStorage.setItem(AT_KEY, v); },
-  get refresh() { return localStorage.getItem(RT_KEY) || ''; },
-  set refresh(v: string) { localStorage.setItem(RT_KEY, v); },
-  clear() { localStorage.removeItem(AT_KEY); localStorage.removeItem(RT_KEY); }
+  roles: { id: number; nombre: string }[];
 };
 
-async function refreshAccessToken(): Promise<string | null> {
-  const rt = tokenStore.refresh;
-  if (!rt) return null;
-  const res = await fetch(`${API_BASE}/api/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: rt })
-  });
-  if (!res.ok) return null;
-  const data = await res.json() as Tokens;
-  if (data.access_token) {
-    tokenStore.access = data.access_token;
-    return data.access_token;
-  }
-  return null;
+export type Project = {
+  id: number; uuid: string; codigo?: string | null;
+  nombre: string; estado: string; prioridad: number;
+  avance_pct?: number | null; presupuesto_monto?: number | null;
+};
+
+export type Task = {
+  id: number; uuid: string; proyecto_id: number;
+  titulo: string; estado: string; prioridad: number;
+};
+
+export type EstadoReportItem = { estado: string; cantidad: number };
+
+const API = (import.meta as any).env?.VITE_API_URL ?? "http://localhost:8000";
+
+const LS = {
+  access: "erp.access_token",
+  refresh: "erp.refresh_token",
+  user: "erp.user",
+};
+
+function getAccessToken() { return localStorage.getItem(LS.access) || ""; }
+function getRefreshToken() { return localStorage.getItem(LS.refresh) || ""; }
+function setTokens(at?: string, rt?: string) {
+  if (at) localStorage.setItem(LS.access, at);
+  if (rt) localStorage.setItem(LS.refresh, rt);
+}
+export function logout() {
+  localStorage.removeItem(LS.access);
+  localStorage.removeItem(LS.refresh);
+  localStorage.removeItem(LS.user);
 }
 
-async function request<T>(path: string, init?: RequestInit, retry = true): Promise<T> {
-  const headers = new Headers(init?.headers || {});
-  if (!headers.has('Content-Type') && init?.body) headers.set('Content-Type', 'application/json');
-  const at = tokenStore.access;
-  if (at) headers.set('Authorization', `Bearer ${at}`);
-
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  if (res.status === 401 && retry) {
-    const newAT = await refreshAccessToken();
-    if (newAT) {
-      const headers2 = new Headers(init?.headers || {});
-      if (!headers2.has('Content-Type') && init?.body) headers2.set('Content-Type', 'application/json');
-      headers2.set('Authorization', `Bearer ${newAT}`);
-      const res2 = await fetch(`${API_BASE}${path}`, { ...init, headers: headers2 });
-      if (!res2.ok) throw new Error(`${res2.status} ${res2.statusText}`);
-      return res2.json() as Promise<T>;
-    }
-  }
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json() as Promise<T>;
+async function raw(path: string, init: RequestInit = {}) {
+  const url = path.startsWith("http") ? path : `${API}${path}`;
+  return fetch(url, init);
 }
 
-export const api = {
-  async login(email: string, password: string): Promise<User> {
-    const res = await fetch(`${API_BASE}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+async function request(path: string, init: RequestInit = {}, retried = false) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init.headers as any),
+  };
+  const at = getAccessToken();
+  if (at) headers.Authorization = `Bearer ${at}`;
+
+  let res = await raw(path, { ...init, headers });
+  if (res.status === 401 && !retried) {
+    const rt = getRefreshToken();
+    if (!rt) throw new Error("No autenticado");
+    const r = await raw("/api/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: rt }),
     });
-    if (!res.ok) throw new Error('Credenciales inválidas');
-    const data = await res.json() as Tokens & User; // login retorna tokens + (a veces user). Cubrimos tokens seguro.
-    if (data.access_token) tokenStore.access = data.access_token;
-    if (data.refresh_token) tokenStore.refresh = data.refresh_token;
-    // Aseguramos el user llamando a /me:
-    return this.me();
-  },
-  me(): Promise<User> {
-    return request<User>('/api/auth/me');
-  },
-  health(): Promise<HealthResponse> {
-    return request<HealthResponse>('/health', { method: 'GET' });
-  },
-  projects: {
-    list(): Promise<Project[]> {
-      return request<Project[]>('/api/projects', { method: 'GET' });
-    },
-    create(payload: { nombre: string; descripcion?: string }): Promise<Project> {
-      return request<Project>('/api/projects', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
+    if (r.ok) {
+      const data = await r.json();
+      setTokens(data.access_token);
+      // reintenta 1 vez con nuevo AT
+      const headers2 = { ...headers, Authorization: `Bearer ${getAccessToken()}` };
+      res = await raw(path, { ...init, headers: headers2 });
+    } else {
+      logout();
+      throw new Error("Sesión expirada");
     }
   }
-};
+  if (!res.ok) {
+    const msg = (await res.text()) || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// ---------- Auth ----------
+export async function login(email: string, password: string) {
+  const data = await request("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+  setTokens(data.access_token, data.refresh_token);
+  localStorage.setItem(LS.user, JSON.stringify(data.user));
+  return data.user as User;
+}
+
+export function currentUser(): User | null {
+  const raw = localStorage.getItem(LS.user);
+  return raw ? JSON.parse(raw) : null;
+}
+
+export function isLoggedIn() {
+  return !!getAccessToken();
+}
+
+// ---------- Projects ----------
+export async function fetchProjects(): Promise<Project[]> {
+  return request("/api/projects", { method: "GET" });
+}
+export async function createProject(payload: {
+  codigo?: string; nombre: string; descripcion?: string; prioridad?: number;
+}): Promise<Project> {
+  return request("/api/projects", { method: "POST", body: JSON.stringify(payload) });
+}
+
+// ---------- Tasks ----------
+export async function fetchTasks(projectId: number): Promise<Task[]> {
+  return request(`/api/projects/${projectId}/tasks`);
+}
+export async function createTask(payload: {
+  proyecto_id: number; titulo: string; descripcion?: string; prioridad?: number;
+}): Promise<Task> {
+  return request(`/api/projects/tasks`, { method: "POST", body: JSON.stringify(payload) });
+}
+export async function patchTask(taskId: number, partial: Partial<Task>): Promise<Task> {
+  return request(`/api/projects/tasks/${taskId}`, { method: "PATCH", body: JSON.stringify(partial) });
+}
+
+// ---------- Report ----------
+export async function fetchEstadoReport(projectId: number): Promise<EstadoReportItem[]> {
+  return request(`/api/projects/${projectId}/report/estado`);
+}
 
 
 ---
 web\src\App.tsx
 
 // web/src/App.tsx
-import { Route, Routes, Navigate } from "react-router-dom";
-import Home from "./pages/Home";
-import Login from "./pages/Login";
-import Projects from "./pages/Projects";
-import ProjectDetail from "./pages/ProjectDetail";
-import Report from "./pages/Report";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import ProtectedRoute from "./components/ProtectedRoute";
-import AppLayout from "./layouts/AppLayout";
-import SimpleLayout from "./layouts/SimpleLayout";
+import LoginPage from "./pages/Login";
+import ProjectsPage from "./pages/Projects";
+import ProjectDetailPage from "./pages/ProjectDetail";
 
 export default function App() {
   return (
-    <Routes>
-      {/* Rutas públicas */}
-      <Route element={<SimpleLayout />}>
-        <Route path="/login" element={<Login />} />
-      </Route>
-
-      {/* Rutas privadas */}
-      <Route element={<ProtectedRoute />}>
-        <Route element={<AppLayout />}>
-          <Route index element={<Home />} />
-          <Route path="/projects" element={<Projects />} />
-          <Route path="/projects/:id" element={<ProjectDetail />} />
-          <Route path="/projects/:id/report" element={<Report />} />
-        </Route>
-      </Route>
-
-      {/* Fallback */}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Navigate to="/projects" replace />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/projects" element={
+          <ProtectedRoute><ProjectsPage /></ProtectedRoute>
+        } />
+        <Route path="/projects/:id" element={
+          <ProtectedRoute><ProjectDetailPage /></ProtectedRoute>
+        } />
+        <Route path="*" element={<Navigate to="/projects" replace />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 
@@ -4645,17 +4530,11 @@ web\src\main.tsx
 // web/src/main.tsx
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
 import App from "./App";
-import { AuthProvider } from "./auth/AuthContext";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <AuthProvider>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </AuthProvider>
+    <App />
   </React.StrictMode>
 );
 
@@ -4999,18 +4878,13 @@ export default function Navbar() {
 web\src\components\ProtectedRoute.tsx
 
 // web/src/components/ProtectedRoute.tsx
-import { Navigate, Outlet, useLocation } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
+import { Navigate, useLocation } from "react-router-dom";
+import { isLoggedIn } from "../api";
 
-export default function ProtectedRoute() {
-  const { isAuthenticated, loading } = useAuth();
-  const location = useLocation();
-
-  if (loading) return null; // o un spinner suave
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace state={{ from: location }} />;
-  }
-  return <Outlet />;
+export default function ProtectedRoute({ children }: { children: JSX.Element }) {
+  const loc = useLocation();
+  if (!isLoggedIn()) return <Navigate to="/login" replace state={{ from: loc }} />;
+  return children;
 }
 
 
@@ -5212,52 +5086,42 @@ export default function Home() {
 web\src\pages\Login.tsx
 
 // web/src/pages/Login.tsx
-import React, { useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext"; // 👈 corrige este path
+import { useState } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
+import { login } from "../api";
 
-export default function Login() {
-  const { login } = useAuth();
-  const nav = useNavigate();
-  const location = useLocation() as any;
-  const redirectTo = location.state?.from?.pathname || "/projects";
-
+export default function LoginPage() {
   const [email, setEmail] = useState("admin@miempresa.com");
   const [password, setPassword] = useState("admin123");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const nav = useNavigate();
+  const loc = useLocation() as any;
 
-  const onSubmit = async (e: React.FormEvent) => {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setErr(null);
-    setLoading(true);
+    setErr(null); setLoading(true);
     try {
       await login(email, password);
-      nav(redirectTo, { replace: true });
-    } catch (ex: any) {
-      setErr(ex?.message || "Error de autenticación");
+      const to = loc?.state?.from?.pathname || "/projects";
+      nav(to, { replace: true });
+    } catch (e: any) {
+      setErr(e?.message || "Error de autenticación");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
-    <div style={{ minHeight: "100dvh", display: "grid", placeItems: "center", fontFamily: "system-ui, sans-serif" }}>
-      <form onSubmit={onSubmit} style={{ width: 320, display: "grid", gap: 12 }}>
-        <h2>Iniciar sesión</h2>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Email</span>
-          <input type="email" value={email} onChange={e => setEmail(e.target.value)} required style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }} />
-        </label>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Contraseña</span>
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} required style={{ padding: 10, borderRadius: 8, border: "1px solid #ddd" }} />
-        </label>
-        {err && <div style={{ color: "#b00" }}>{err}</div>}
-        <button type="submit" disabled={loading} style={{ padding: "10px 14px", borderRadius: 8, background: "#111827", color: "white", border: "none", cursor: "pointer" }}>
-          {loading ? "Entrando…" : "Entrar"}
-        </button>
+    <div style={{ maxWidth: 420, margin: "80px auto", display: "grid", gap: 12 }}>
+      <h2>Ingresar</h2>
+      <form onSubmit={onSubmit} style={{ display: "grid", gap: 8 }}>
+        <input placeholder="Email" value={email} onChange={(e)=>setEmail(e.target.value)} />
+        <input placeholder="Password" type="password" value={password} onChange={(e)=>setPassword(e.target.value)} />
+        <button disabled={loading} type="submit">{loading ? "Ingresando…" : "Entrar"}</button>
+        {err && <small style={{ color: "crimson" }}>{err}</small>}
       </form>
+      <small>Tip: usá las cuentas seed del README.</small>
     </div>
   );
 }
@@ -5369,104 +5233,158 @@ export default function NotFoundPage() {
 ---
 web\src\pages\ProjectDetail.tsx
 
-import React, { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
+// web/src/pages/ProjectDetail.tsx
+import { useEffect, useMemo, useState } from "react";
+import { useParams, Link } from "react-router-dom";
+import {
+  fetchTasks,
+  createTask,
+  patchTask,
+  fetchEstadoReport,
+  type Task,
+} from "../api";
 
-type Tarea = {
-  id: number;
-  uuid: string;
-  proyecto_id: number;
-  titulo: string;
-  estado: string;
-  prioridad: number;
-  real_horas?: number | null;
-};
+// Estados sugeridos. Podés ajustar esta lista en un solo lugar.
+const TASK_STATES = ["PENDIENTE", "EN_PROGRESO", "BLOQUEADA", "HECHA", "CANCELADA"] as const;
 
-const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-
-export default function ProjectDetail() {
-  const { id } = useParams<{ id: string }>();
-  const pid = Number(id);
-  const { getAccessToken } = useAuth();
-  const [items, setItems] = useState<Tarea[]>([]);
-  const [err, setErr] = useState<string | null>(null);
+export default function ProjectDetailPage() {
+  const { id } = useParams();
+  const projectId = Number(id);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [titulo, setTitulo] = useState("");
+  const [report, setReport] = useState<{ estado: string; cantidad: number }[]>([]);
+  const [savingTaskId, setSavingTaskId] = useState<number | null>(null);
 
-  const load = async () => {
-    setErr(null);
+  async function reloadReport() {
+    const r = await fetchEstadoReport(projectId);
+    setReport(r.map((x) => ({ estado: x.estado, cantidad: x.cantidad })));
+  }
+
+  async function load() {
     setLoading(true);
+    setErr(null);
     try {
-      const at = await getAccessToken();
-      const res = await fetch(`${API}/api/projects/${pid}/tasks`, {
-        headers: { Authorization: `Bearer ${at}` }
-      });
-      if (!res.ok) throw new Error("No se pudieron obtener tareas");
-      setItems(await res.json());
+      const [t, _] = await Promise.all([fetchTasks(projectId), reloadReport()]);
+      setTasks(t);
     } catch (e: any) {
       setErr(e?.message || "Error");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    load();
+  }, [projectId]);
 
-  const updateEstado = async (taskId: number, estado: string) => {
+  async function onCreate(e: React.FormEvent) {
+    e.preventDefault();
+    const t = titulo.trim();
+    if (!t) return;
+    await createTask({ proyecto_id: projectId, titulo: t, prioridad: 2 });
+    setTitulo("");
+    await load(); // refresca tareas + reporte
+  }
+
+  async function changeEstado(taskId: number, nuevoEstado: string) {
+    const prev = tasks.find((x) => x.id === taskId)?.estado;
+    if (!prev || prev === nuevoEstado) return;
+
+    setSavingTaskId(taskId);
+    // Optimista: actualizamos UI al toque
+    setTasks((curr) => curr.map((t) => (t.id === taskId ? { ...t, estado: nuevoEstado } : t)));
+
     try {
-      const at = await getAccessToken();
-      const res = await fetch(`${API}/api/projects/tasks/${taskId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${at}` },
-        body: JSON.stringify({ estado })
-      });
-      if (!res.ok) throw new Error("No se pudo actualizar tarea");
-      await load();
-    } catch (e: any) {
-      alert(e?.message || "Error al actualizar");
+      await patchTask(taskId, { estado: nuevoEstado });
+      await reloadReport();
+    } catch (e) {
+      // Revertir si falla
+      setTasks((curr) => curr.map((t) => (t.id === taskId ? { ...t, estado: prev } : t)));
+      alert("No se pudo actualizar el estado de la tarea.");
+    } finally {
+      setSavingTaskId(null);
     }
-  };
+  }
 
   return (
-    <div>
-      <h2>Proyecto #{pid} · Tareas</h2>
+    <div style={{ maxWidth: 900, margin: "24px auto", display: "grid", gap: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <Link to="/projects">← Volver</Link>
+        <h2 style={{ margin: 0 }}>Proyecto #{projectId}</h2>
+      </div>
+
+      <form onSubmit={onCreate} style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 8 }}>
+        <input
+          placeholder="Nueva tarea..."
+          value={titulo}
+          onChange={(e) => setTitulo(e.target.value)}
+        />
+        <button type="submit">Crear tarea</button>
+      </form>
+
       {loading && <p>Cargando...</p>}
-      {err && <p style={{ color: "#b91c1c" }}>⚠️ {err}</p>}
-      {!loading && !err && (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", background: "white", borderRadius: 12, overflow: "hidden" }}>
-            <thead style={{ background: "#e2e8f0", textAlign: "left" }}>
-              <tr>
-                <th style={{ padding: 10 }}>#</th>
-                <th style={{ padding: 10 }}>Título</th>
-                <th style={{ padding: 10 }}>Estado</th>
-                <th style={{ padding: 10 }}>Prioridad</th>
-                <th style={{ padding: 10 }}>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(t => (
-                <tr key={t.id} style={{ borderBottom: "1px solid #e2e8f0" }}>
-                  <td style={{ padding: 10 }}>{t.id}</td>
-                  <td style={{ padding: 10 }}>{t.titulo}</td>
-                  <td style={{ padding: 10 }}>{t.estado}</td>
-                  <td style={{ padding: 10 }}>{t.prioridad}</td>
-                  <td style={{ padding: 10 }}>
-                    <select value={t.estado} onChange={(e)=>updateEstado(t.id, e.target.value)}>
-                      <option value="PENDIENTE">PENDIENTE</option>
-                      <option value="EN_PROGRESO">EN_PROGRESO</option>
-                      <option value="HECHA">HECHA</option>
+      {err && <p style={{ color: "crimson" }}>{err}</p>}
+
+      <section>
+        <h3 style={{ marginBottom: 8 }}>Tareas</h3>
+        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6 }}>
+          {tasks.map((t) => {
+            // Aseguramos que el estado actual esté siempre en el listado (por si viene algo distinto)
+            const options = Array.from(new Set([t.estado, ...TASK_STATES]));
+            return (
+              <li
+                key={t.id}
+                style={{
+                  padding: 12,
+                  border: "1px solid #eee",
+                  borderRadius: 8,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                <div>
+                  <strong>{t.titulo}</strong>
+                  <br />
+                  <small>Prioridad: {t.prioridad}</small>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <label>
+                    <small>Estado:&nbsp;</small>
+                    <select
+                      value={t.estado}
+                      disabled={savingTaskId === t.id}
+                      onChange={(e) => changeEstado(t.id, e.target.value)}
+                    >
+                      {options.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
                     </select>
-                  </td>
-                </tr>
-              ))}
-              {items.length === 0 && (
-                <tr><td colSpan={5} style={{ padding: 10, textAlign: "center" }}>Sin tareas.</td></tr>
-              )}
-            </tbody>
-          </table>
+                  </label>
+                  {savingTaskId === t.id && <small style={{ opacity: 0.7 }}>Guardando…</small>}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section>
+        <h3 style={{ marginBottom: 8 }}>Reporte por estado</h3>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          {report.map((r) => (
+            <div key={r.estado} style={{ border: "1px solid #eee", borderRadius: 8, padding: "8px 12px" }}>
+              <strong>{r.estado}</strong>: {r.cantidad}
+            </div>
+          ))}
+          {!report.length && <small>No hay datos</small>}
         </div>
-      )}
+      </section>
     </div>
   );
 }
@@ -5629,89 +5547,78 @@ export default function ProjectDetailsPage() {
 ---
 web\src\pages\Projects.tsx
 
-import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { useAuth } from "../auth/AuthContext";
+// web/src/pages/Projects.tsx
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { createProject, fetchProjects, logout, type Project } from "../api";
 
-type Proyecto = {
-  id: number;
-  uuid: string;
-  codigo?: string | null;
-  nombre: string;
-  estado: string;
-  prioridad: number;
-  avance_pct?: number | null;
-  presupuesto_monto?: number | null;
-};
-
-const API = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
-
-export default function Projects() {
-  const { getAccessToken } = useAuth();
-  const [items, setItems] = useState<Proyecto[]>([]);
-  const [err, setErr] = useState<string | null>(null);
+export default function ProjectsPage() {
+  const [items, setItems] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [codigo, setCodigo] = useState("");
+  const [nombre, setNombre] = useState("");
+  const [creating, setCreating] = useState(false);
+  const nav = useNavigate();
 
-  useEffect(() => {
-    const run = async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const at = await getAccessToken();
-        const res = await fetch(`${API}/api/projects`, {
-          headers: { Authorization: `Bearer ${at}` }
-        });
-        if (!res.ok) throw new Error("No se pudieron obtener proyectos");
-        const data: Proyecto[] = await res.json();
-        setItems(data);
-      } catch (e: any) {
-        setErr(e?.message || "Error");
-      } finally {
-        setLoading(false);
-      }
-    };
-    void run();
-  }, [getAccessToken]);
+  async function load() {
+    setLoading(true); setErr(null);
+    try {
+      const data = await fetchProjects();
+      setItems(data);
+    } catch (e: any) {
+      setErr(e?.message || "Error");
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(()=>{ load(); }, []);
+
+  async function onCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!nombre.trim()) return;
+    setCreating(true);
+    try {
+      const p = await createProject({ codigo: codigo || undefined, nombre: nombre.trim(), prioridad: 2 });
+      setCodigo(""); setNombre("");
+      await load();                // ← refresca lista
+      nav(`/projects/${p.id}`);    // opcional: ir al detalle del recién creado
+    } catch (e:any) {
+      alert(e?.message || "No se pudo crear el proyecto");
+    } finally {
+      setCreating(false);
+    }
+  }
 
   return (
-    <div>
-      <h2>Proyectos</h2>
-      {loading && <p>Cargando...</p>}
-      {err && <p style={{ color: "#b91c1c" }}>⚠️ {err}</p>}
-      {!loading && !err && (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", background: "white", borderRadius: 12, overflow: "hidden" }}>
-            <thead style={{ background: "#e2e8f0", textAlign: "left" }}>
-              <tr>
-                <th style={{ padding: 10 }}>#</th>
-                <th style={{ padding: 10 }}>Código</th>
-                <th style={{ padding: 10 }}>Nombre</th>
-                <th style={{ padding: 10 }}>Estado</th>
-                <th style={{ padding: 10 }}>Prioridad</th>
-                <th style={{ padding: 10 }}>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(p => (
-                <tr key={p.id} style={{ borderBottom: "1px solid #e2e8f0" }}>
-                  <td style={{ padding: 10 }}>{p.id}</td>
-                  <td style={{ padding: 10 }}>{p.codigo || "-"}</td>
-                  <td style={{ padding: 10 }}>{p.nombre}</td>
-                  <td style={{ padding: 10 }}>{p.estado}</td>
-                  <td style={{ padding: 10 }}>{p.prioridad}</td>
-                  <td style={{ padding: 10 }}>
-                    <Link to={`/projects/${p.id}`}>Ver tareas</Link>{" · "}
-                    <Link to={`/projects/${p.id}/report`}>Reporte</Link>
-                  </td>
-                </tr>
-              ))}
-              {items.length === 0 && (
-                <tr><td colSpan={6} style={{ padding: 10, textAlign: "center" }}>Sin proyectos visibles.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+    <div style={{ maxWidth: 900, margin: "24px auto", display: "grid", gap: 16 }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h2 style={{ margin: 0 }}>Proyectos</h2>
+        <button onClick={()=>{ logout(); nav("/login", { replace: true }); }}>Salir</button>
+      </header>
+
+      <form onSubmit={onCreate} style={{ display: "grid", gridTemplateColumns: "160px 1fr 120px", gap: 8 }}>
+        <input placeholder="Código (opcional)" value={codigo} onChange={(e)=>setCodigo(e.target.value)} />
+        <input placeholder="Nombre del proyecto" value={nombre} onChange={(e)=>setNombre(e.target.value)} />
+        <button disabled={creating} type="submit">{creating? "Creando…" : "Crear"}</button>
+      </form>
+
+      {loading && <p>Cargando…</p>}
+      {err && <p style={{ color: "crimson" }}>{err}</p>}
+
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 8 }}>
+        {items.map(p => (
+          <li key={p.id} style={{ border: "1px solid #eee", borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between" }}>
+            <div>
+              <strong>{p.codigo ? `${p.codigo} — ` : ""}{p.nombre}</strong><br/>
+              <small>Estado: {p.estado} · Prioridad: {p.prioridad}</small>
+            </div>
+            <Link to={`/projects/${p.id}`}>Ver</Link>
+          </li>
+        ))}
+      </ul>
+
+      {!loading && !items.length && <small>No hay proyectos todavía.</small>}
     </div>
   );
 }

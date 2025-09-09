@@ -23,6 +23,7 @@ $excludedExtensions = @(
     '.jpeg',
     '.gif',
     '.ico'
+    '.txt'
 )
 
 

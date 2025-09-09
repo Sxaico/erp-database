@@ -1,60 +1,75 @@
 // web/src/pages/Projects.tsx
 import { useEffect, useState } from "react";
-import { fetchProjects, createProject, type Project } from "../api";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { createProject, fetchProjects, logout, type Project } from "../api";
 
 export default function ProjectsPage() {
   const [items, setItems] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string|null>(null);
-  const [nombre, setNombre] = useState("");
+  const [err, setErr] = useState<string | null>(null);
   const [codigo, setCodigo] = useState("");
+  const [nombre, setNombre] = useState("");
+  const [creating, setCreating] = useState(false);
+  const nav = useNavigate();
 
   async function load() {
     setLoading(true); setErr(null);
-    try { setItems(await fetchProjects()); }
-    catch(e:any){ setErr(e?.message || "Error"); }
-    finally{ setLoading(false); }
+    try {
+      const data = await fetchProjects();
+      setItems(data);
+    } catch (e: any) {
+      setErr(e?.message || "Error");
+    } finally {
+      setLoading(false);
+    }
   }
-
-  useEffect(() => { load(); }, []);
+  useEffect(()=>{ load(); }, []);
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
-    const n = nombre.trim();
-    if (!n) return;
-    await createProject({ nombre: n, codigo: codigo.trim() || null, prioridad: 2 });
-    setNombre(""); setCodigo("");
-    // 🔁 REFRESH inmediato
-    await load();
+    if (!nombre.trim()) return;
+    setCreating(true);
+    try {
+      const p = await createProject({ codigo: codigo || undefined, nombre: nombre.trim(), prioridad: 2 });
+      setCodigo(""); setNombre("");
+      await load();                // ← refresca lista
+      nav(`/projects/${p.id}`);    // opcional: ir al detalle del recién creado
+    } catch (e:any) {
+      alert(e?.message || "No se pudo crear el proyecto");
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
-    <div style={{maxWidth:800, margin:"24px auto", display:"grid", gap:16}}>
-      <h2>Proyectos</h2>
+    <div style={{ maxWidth: 900, margin: "24px auto", display: "grid", gap: 16 }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h2 style={{ margin: 0 }}>Proyectos</h2>
+        <button onClick={()=>{ logout(); nav("/login", { replace: true }); }}>Salir</button>
+      </header>
 
-      <form onSubmit={onCreate} style={{display:"grid", gridTemplateColumns:"1fr 200px 120px", gap:8}}>
-        <input placeholder="Nombre del proyecto" value={nombre} onChange={e=>setNombre(e.target.value)} />
-        <input placeholder="Código (opcional)" value={codigo} onChange={e=>setCodigo(e.target.value)} />
-        <button type="submit">Crear</button>
+      <form onSubmit={onCreate} style={{ display: "grid", gridTemplateColumns: "160px 1fr 120px", gap: 8 }}>
+        <input placeholder="Código (opcional)" value={codigo} onChange={(e)=>setCodigo(e.target.value)} />
+        <input placeholder="Nombre del proyecto" value={nombre} onChange={(e)=>setNombre(e.target.value)} />
+        <button disabled={creating} type="submit">{creating? "Creando…" : "Crear"}</button>
       </form>
 
-      {loading && <p>Cargando...</p>}
-      {err && <p style={{color:"crimson"}}>{err}</p>}
+      {loading && <p>Cargando…</p>}
+      {err && <p style={{ color: "crimson" }}>{err}</p>}
 
-      <ul style={{listStyle:"none", padding:0, margin:0, display:"grid", gap:6}}>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 8 }}>
         {items.map(p => (
-          <li key={p.id} style={{padding:12, border:"1px solid #eee", borderRadius:8}}>
-            <div style={{display:"flex", justifyContent:"space-between", gap:12}}>
-              <div>
-                <strong>{p.nombre}</strong> {p.codigo ? `· ${p.codigo}` : ""}<br/>
-                <small>Estado: {p.estado} · Prioridad: {p.prioridad}</small>
-              </div>
-              <Link to={`/projects/${p.id}`}>Abrir</Link>
+          <li key={p.id} style={{ border: "1px solid #eee", borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between" }}>
+            <div>
+              <strong>{p.codigo ? `${p.codigo} — ` : ""}{p.nombre}</strong><br/>
+              <small>Estado: {p.estado} · Prioridad: {p.prioridad}</small>
             </div>
+            <Link to={`/projects/${p.id}`}>Ver</Link>
           </li>
         ))}
       </ul>
+
+      {!loading && !items.length && <small>No hay proyectos todavía.</small>}
     </div>
   );
 }
