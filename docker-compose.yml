@@ -20,7 +20,7 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # 2. Administrador de DB (pgAdmin)
+  # 2. Administrador de DB (pgAdmin) - opcional
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: erp_pgadmin
@@ -29,7 +29,7 @@ services:
       PGADMIN_DEFAULT_PASSWORD: admin123
       TZ: America/Argentina/Buenos_Aires
     ports:
-      - "8080:80"
+      - "8081:80"
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,7 +37,7 @@ services:
       - ./pgadmin-data:/var/lib/pgadmin
     restart: unless-stopped
 
-  # 3. API Backend (FastAPI)
+  # 3. API Backend (FastAPI) - opcional
   api:
     build:
       context: ./api
@@ -54,12 +54,51 @@ services:
       - ./api:/app
     restart: unless-stopped
 
-  # 4. Frontend Low-Code (Appsmith) - NUEVO
+  # 4. Directus (Admin/CRUD/API)
+  directus:
+    image: directus/directus:10.11.0
+    container_name: erp_directus
+    environment:
+      KEY: "cambia-esto-en-produccion"
+      SECRET: "cambia-esto-en-produccion"
+      ADMIN_EMAIL: "admin@miempresa.com"
+      ADMIN_PASSWORD: "admin123"
+      DB_CLIENT: "pg"
+      DB_HOST: "postgres"
+      DB_PORT: 5432
+      DB_DATABASE: "erp_db"
+      DB_USER: "erp_user"
+      DB_PASSWORD: "erp_password123"
+      TZ: America/Argentina/Buenos_Aires
+    ports:
+      - "8055:8055"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./directus-data:/directus/database
+      - ./directus-uploads:/directus/uploads
+    restart: unless-stopped
+
+  # 5. Metabase (BI/KPIs)
+  metabase:
+    image: metabase/metabase:v0.49.12
+    container_name: erp_metabase
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./metabase-data:/metabase-data
+    restart: unless-stopped
+
+  # 6. Frontend Low-Code (Appsmith)
   appsmith:
     image: index.docker.io/appsmith/appsmith-ce
     container_name: erp_appsmith
     ports:
-      - "80:80"     # Acceso web principal
+      - "8080:80"   # Acceso web principal
       - "9001:9001" # Supervisor (opcional)
     volumes:
       - ./appsmith-stacks:/appsmith-stacks

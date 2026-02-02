@@ -1,12 +1,12 @@
 
-# ERP MVP — FastAPI + PostgreSQL + React (Vite)
+# ERP MVP — PostgreSQL + Directus + Metabase + Appsmith (local)
 
-MVP funcional para **gestión básica de proyectos y tareas** con **autenticación por roles** (JWT).  
-Stack: **FastAPI**, **PostgreSQL**, **pgAdmin**, **Vite/React** en **Docker Compose**.
+MVP local para **formularios, API, tableros y DB única** usando **Docker Compose**.  
+Stack MVP: **PostgreSQL**, **Directus**, **Metabase**, **Appsmith**.
 
 ---
 
-## 🚀 Quick Start (local)
+## 🚀 Quick Start (local, sin Nginx)
 
 ```bash
 # 1) Clonar
@@ -17,14 +17,12 @@ cd erp-mvp
 docker compose up -d --build
 
 # 3) Verificar
-# API health:
-http://localhost:8000/health
-# Docs:
-http://localhost:8000/docs
-# UI:
-http://localhost:5173/
-# pgAdmin:
-http://localhost:8080/
+# Directus:
+http://localhost:8055
+# Metabase:
+http://localhost:3000
+# Appsmith:
+http://localhost:8080
 ```
 
 > Si cambias puertos, ajústalos en `docker-compose.yml`.
@@ -33,19 +31,14 @@ http://localhost:8080/
 
 ## 🧱 Servicios (local)
 
-| Servicio  | URL                            | Notas                      |
-| --------- | ------------------------------ | -------------------------- |
-| API       | `http://localhost:8000`        | Docs en `/docs` y `/redoc` |
-| Health    | `http://localhost:8000/health` | Estado DB y versión        |
-| UI (Vite) | `http://localhost:5173`        | UI mínima                  |
-| pgAdmin   | `http://localhost:8080`        | Admin DB                   |
+| Servicio  | URL                      | Notas                               |
+| --------- | ------------------------ | ----------------------------------- |
+| Postgres  | `localhost:5432`         | DB única (volumen local)            |
+| Directus  | `http://localhost:8055`  | Admin/CRUD/API                      |
+| Metabase  | `http://localhost:3000`  | BI/KPIs (metadata por defecto en H2)|
+| Appsmith  | `http://localhost:8080`  | Apps internas (persistencia volumen)|
 
-**pgAdmin (primera vez)**
-Usuario: `admin@miempresa.com` — Password: `admin123`
-Conectar servidor:
-
-* Host: `postgres` — Port: `5432`
-* DB: `erp_db` — User: `erp_user` — Pass: `erp_password123`
+> **pgAdmin** es opcional en este stack y corre en `http://localhost:8081`.
 
 ---
 
@@ -67,132 +60,56 @@ Conectar servidor:
 
 ```bash
 .
-├─ api/
-│  ├─ .env
-│  ├─ Dockerfile
-│  ├─ requirements.txt
-│  └─ app/
-│     ├─ main.py, config.py, database.py
-│     ├─ utils/ (security, dependencies)
-│     ├─ auth/ (models, schemas, routes)
-│     └─ projects/ (models, schemas, routes)
-├─ init-scripts/ (DDL + seeds)
+├─ init-scripts/ (DDL + seeds + roles)
 ├─ docker-compose.yml
-└─ web/  (Vite + React)
-   ├─ package.json
-   ├─ src/
-   │  ├─ main.tsx
-   │  ├─ App.tsx
-   │  ├─ components/ProtectedRoute.tsx
-   │  └─ styles.css   ← (tiny CSS opcional)
+├─ directus-data/ (volumen local)
+├─ metabase-data/ (volumen local)
+└─ appsmith-stacks/ (volumen local)
 ```
 
 ---
 
-## 🔐 Endpoints (API)
+## 🔐 Variables de entorno (MVP)
 
-**Auth**
+Variables principales (definidas en `docker-compose.yml`):
 
-* `POST /api/auth/login` → `{ access_token, refresh_token, expires_in, user }`
-* `POST /api/auth/refresh` → `{ access_token, expires_in }`
-* `GET /api/auth/me` (Bearer) → usuario actual
-* `GET /api/auth/users` (Admin/Super Admin)
-
-**Projects & Tasks**
-
-* `POST /api/projects` (write\:projects) → crear proyecto
-* `GET /api/projects` (read\:projects) → listar visibles según rol/membresía
-* `GET /api/projects/{id}` (read\:projects) → detalle si hay acceso
-* `PATCH /api/projects/{id}` (write\:projects) → actualizar
-* `POST /api/projects/tasks` (write\:tasks) → crear tarea
-* `GET /api/projects/{id}/tasks` (read\:tasks) → listar tareas
-* `PATCH /api/projects/tasks/{task_id}` (write\:tasks) → actualizar tarea
-* `GET /api/projects/{id}/report/estado` (read\:reports) → vista agregada por estado
-
-**Miembros de proyecto**
-
-* `GET /api/projects/{id}/members` (read\:projects)
-* `POST /api/projects/{id}/members` (write\:projects + Admin)
-  body: `{ usuario_id?: number, email?: string }`
-* `DELETE /api/projects/{id}/members/{usuario_id}` (write\:projects + Admin)
+* **Postgres**: `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`
+* **Directus**: `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `DB_*`, `KEY`, `SECRET`
+* **Metabase**: sin variables obligatorias para MVP (usa H2 interna)
+* **Appsmith**: sin variables obligatorias (persistencia en volumen)
 
 ---
 
-## ⚙️ Variables de entorno (api/.env)
-
-
-```env
-APP_NAME="ERP API"
-VERSION="1.0.0"
-DESCRIPTION="Sistema de Gestión Empresarial - API Backend"
-DATABASE_URL="postgresql+asyncpg://erp_user:erp_password123@postgres:5432/erp_db"
-DATABASE_URL_SYNC="postgresql://erp_user:erp_password123@postgres:5432/erp_db"
-HOST="0.0.0.0"
-PORT=8000
-DEBUG=true
-SECRET_KEY="CÁMBIAME_EN_PROD"
-ALGORITHM="HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-ALLOWED_ORIGINS="http://localhost:5173,http://127.0.0.1:5173"
-MAX_UPLOAD_SIZE=10485760
-ITEMS_PER_PAGE=50
-```
-
-> En **producción**, cambia `SECRET_KEY`, contraseñas y `ALLOWED_ORIGINS` (tu dominio).
+> En **producción**, cambia `KEY`, `SECRET` y contraseñas.
 
 ---
 
-## 🧪 Pruebas rápidas (PowerShell)
+## ✅ Prueba E2E en 10 minutos
 
-```powershell
-# Login admin
-$resp = Invoke-RestMethod -Method POST -Uri "http://localhost:8000/api/auth/login" `
-  -ContentType "application/json" `
-  -Body '{"email":"admin@miempresa.com","password":"admin123"}'
-$AT = $resp.access_token
+1. **Directus**: crea una colección `tareas` con campos básicos (área, estado, fechas) y carga 2–3 registros.
+2. **Metabase**: conecta a PostgreSQL con `bi_reader` y crea una pregunta “tareas por estado”.
+3. **Appsmith**:
+   - Crea un formulario de alta con `app_writer`.
+   - Crea una vista de reportes (tabla o iframe con Metabase).
 
-# Me
-Invoke-RestMethod -Method GET -Uri "http://localhost:8000/api/auth/me" `
-  -Headers @{ Authorization = "Bearer $AT" } | ConvertTo-Json -Depth 6
-
-# Crear proyecto
-$createProjBody = @{ codigo="MVP-0001"; nombre="MVP Demo"; descripcion="Proyecto MVP e2e"; prioridad=2 } | ConvertTo-Json
-$proj = Invoke-RestMethod -Method POST -Uri "http://localhost:8000/api/projects" `
-  -Headers @{ Authorization = "Bearer $AT" } -ContentType "application/json" -Body $createProjBody
-$PROJ_ID = $proj.id
-
-# Crear tareas
-$body1 = @{ proyecto_id=$PROJ_ID; titulo="Tarea 1"; descripcion="..."; prioridad=2 } | ConvertTo-Json
-$body2 = @{ proyecto_id=$PROJ_ID; titulo="Tarea 2"; descripcion="..."; prioridad=2 } | ConvertTo-Json
-$t1 = Invoke-RestMethod -Method POST -Uri "http://localhost:8000/api/projects/tasks" `
-  -Headers @{ Authorization = "Bearer $AT" } -ContentType "application/json" -Body $body1
-$t2 = Invoke-RestMethod -Method POST -Uri "http://localhost:8000/api/projects/tasks" `
-  -Headers @{ Authorization = "Bearer $AT" } -ContentType "application/json" -Body $body2
-
-# Cambiar estado
-Invoke-RestMethod -Method PATCH -Uri "http://localhost:8000/api/projects/tasks/$($t1.id)" `
-  -Headers @{ Authorization = "Bearer $AT" } -ContentType "application/json" `
-  -Body (@{ estado="HECHA" } | ConvertTo-Json)
-
-# Reporte por estado
-Invoke-RestMethod -Method GET -Uri "http://localhost:8000/api/projects/$PROJ_ID/report/estado" `
-  -Headers @{ Authorization = "Bearer $AT" } | ConvertTo-Json -Depth 6
-```
+Si ves datos en Metabase y podés crear/editar desde Appsmith, el MVP está OK.
 
 ---
 
-## 🖥️ UI mínima & tiny CSS
+## 🧰 Roles mínimos en Postgres
 
-* En `web/src/main.tsx` ya está corregida la importación:
-  `import ProtectedRoute from "./components/ProtectedRoute";`
-* Puedes añadir estilos rápidos con `web/src/styles.css` (ver abajo “tiny CSS”).
-* web/ sirve con Vite en http://localhost:5173/.
+En el primer arranque se crean:
+
+* `bi_reader` (solo lectura)
+* `app_writer` (lectura + escritura)
+
+Para cambiar passwords edita `init-scripts/09-roles-bi-app.sql`.
 
 ---
 
 ## 🧰 Troubleshooting
 
-* **Puertos ocupados**: libera 5432/8000/8080/5173 o ajusta puertos.
+* **Puertos ocupados**: libera 5432/8055/3000/8080 o ajusta puertos.
 * **Seeds no corren**: si existe `./pgdata/`, no se re-ejecutan.
 * **Reset DB** (⚠️ borra datos locales):
 
@@ -205,8 +122,9 @@ Invoke-RestMethod -Method GET -Uri "http://localhost:8000/api/projects/$PROJ_ID/
 * **Logs**:
 
  ```bash
- docker compose logs -f api
- docker compose logs -f web
+ docker compose logs -f directus
+ docker compose logs -f metabase
+ docker compose logs -f appsmith
  docker compose logs -f postgres
  ```
 
@@ -234,7 +152,7 @@ Invoke-RestMethod -Method GET -Uri "http://localhost:8000/api/projects/$PROJ_ID/
  newgrp docker
  ```
   
-3. **Clonar repo** y crear `.env` de producción (API) con secretos reales y `ALLOWED_ORIGINS="https://tu-dominio.com"`.
+3. **Clonar repo** y crear secretos reales para Directus (`KEY`, `SECRET`, credenciales admin).
 4. **Ajustar `docker-compose.yml`**: cambia puertos si usas Nginx (ver más abajo).
 5. **Nginx + Certbot**:
 
@@ -245,7 +163,7 @@ Invoke-RestMethod -Method GET -Uri "http://localhost:8000/api/projects/$PROJ_ID/
    sudo ufw enable
    ```
 
-   Virtual hosts (API y Web) apuntando a los puertos publicados por tus contenedores.
+   Virtual hosts (Directus, Metabase, Appsmith) apuntando a los puertos publicados por tus contenedores.
    Emite certificados:
 
    ```bash
@@ -266,15 +184,13 @@ Invoke-RestMethod -Method GET -Uri "http://localhost:8000/api/projects/$PROJ_ID/
    ```
 
 **Alternativa más simple**: *Caddy reverse proxy* en lugar de Nginx (auto-TLS con DNS correcto).
-**Alternativa más directa** (sin proxy): abrir puertos 5173/8000 y usar HTTP plano (no recomendado para prod).
+**Alternativa más directa** (sin proxy): abrir puertos 8055/3000/8080 y usar HTTP plano (no recomendado para prod).
 
 ---
 
 ## 🔒 Check de seguridad básico (prod)
 
-* Cambia `SECRET_KEY` y **todas** las contraseñas.
-* Usa `DEBUG=false`.
-* Restringe `ALLOWED_ORIGINS` a tu dominio.
+* Cambia `KEY`, `SECRET` y **todas** las contraseñas.
 * Habilita firewall (UFW) solo 80/443/22.
 * Backups diarios y retención (7/14/30 días).
 
