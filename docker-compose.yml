@@ -69,6 +69,7 @@ services:
       DB_DATABASE: "erp_db"
       DB_USER: "erp_user"
       DB_PASSWORD: "erp_password123"
+      DB_SEARCH_PATH: "array:public,sigco"
       TZ: America/Argentina/Buenos_Aires
     ports:
       - "8055:8055"
@@ -89,6 +90,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+        MD_DB_FILE: /metabase-data/metabase.db
     volumes:
       - ./metabase-data:/metabase-data
     restart: unless-stopped
