@@ -10,8 +10,12 @@ api/.env
 
 # datos locales de postgres
 pgdata/
+pgadmin-data/
+appsmith-stacks/data/
+appsmith-stacks/configuration/
 
 # artefactos de editor/OS
 .DS_Store
 .vscode/
 .idea/
+
