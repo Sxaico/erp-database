@@ -70,6 +70,9 @@ services:
       DB_USER: "erp_user"
       DB_PASSWORD: "erp_password123"
       DB_SEARCH_PATH: "array:public,sigco"
+      STORAGE_LOCATIONS: "local"
+      STORAGE_LOCAL_DRIVER: "local"
+      STORAGE_LOCAL_ROOT: "/directus/uploads"
       TZ: America/Argentina/Buenos_Aires
     ports:
       - "8055:8055"
