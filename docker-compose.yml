@@ -1,7 +1,7 @@
 services:
   # 1. Base de Datos
   postgres:
-    image: postgres:16
+    image: postgres:17
     container_name: erp_postgres
     environment:
       POSTGRES_DB: erp_db
@@ -94,7 +94,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-        MD_DB_FILE: /metabase-data/metabase.db
+      MB_DB_FILE: /metabase-data/metabase.db
     volumes:
       - ./metabase-data:/metabase-data
     restart: unless-stopped
@@ -109,4 +109,19 @@ services:
     volumes:
       - ./appsmith-stacks:/appsmith-stacks
     restart: unless-stopped
-    # Appsmith usa la red default bridge para ver a 'postgres' por su nombre
+
+  # 7. OpenProject CE (Planificación + Gantt + Work Packages)
+  openproject:
+    image: openproject/openproject:17
+    container_name: erp_openproject
+    env_file:
+      - ./openproject.env
+    ports:
+      - "8082:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./openproject-assets:/var/openproject/assets
+    restart: unless-stopped
+
